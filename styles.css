@@ -19,12 +19,6 @@
     min-height: 40px;
 }
 
-.pi-input-placeholder {
-    color: var(--text-muted);
-    font-size: 0.85em;
-    font-style: italic;
-}
-
 /* ── Messages ── */
 .pi-message {
     margin-bottom: 16px;
@@ -129,4 +123,111 @@
 .pi-tool-result-content {
     max-height: 300px;
     overflow-y: auto;
+}
+
+/* ── Input area ── */
+.pi-input-area {
+    display: flex;
+    align-items: flex-end;
+    gap: 8px;
+}
+
+.pi-input-textarea {
+    flex: 1;
+    resize: none;
+    min-height: 36px;
+    max-height: 200px;
+    border: 1px solid var(--background-modifier-border);
+    border-radius: 6px;
+    padding: 8px;
+    background: var(--background-primary);
+    color: var(--text-normal);
+    font-family: var(--font-text);
+    font-size: var(--font-text-size);
+    line-height: 1.4;
+    overflow-y: auto;
+}
+
+.pi-input-textarea:focus {
+    outline: none;
+    border-color: var(--interactive-accent);
+}
+
+.pi-input-textarea.pi-input-disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+/* ── Abort button ── */
+.pi-abort-btn {
+    padding: 4px 12px;
+    border-radius: 4px;
+    background: var(--background-modifier-error);
+    color: var(--text-on-accent);
+    border: none;
+    cursor: pointer;
+    font-size: 0.85em;
+    white-space: nowrap;
+    flex-shrink: 0;
+}
+
+.pi-abort-btn:hover {
+    opacity: 0.9;
+}
+
+/* ── Attachment chips ── */
+.pi-attachments {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    padding: 4px 0;
+}
+
+.pi-attachment-chip {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    background: var(--background-secondary);
+    border-radius: 12px;
+    padding: 2px 8px;
+    font-size: 0.8em;
+}
+
+.pi-attachment-name {
+    max-width: 150px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.pi-attachment-remove {
+    cursor: pointer;
+    opacity: 0.6;
+    font-size: 1.1em;
+    line-height: 1;
+}
+
+.pi-attachment-remove:hover {
+    opacity: 1;
+}
+
+.pi-attachment-thumb {
+    flex-shrink: 0;
+}
+
+/* ── Command suggest ── */
+.pi-command-suggest-item {
+    padding: 4px 0;
+}
+
+.pi-command-name {
+    font-weight: 600;
+    font-family: var(--font-monospace);
+    font-size: 0.9em;
+}
+
+.pi-command-desc {
+    color: var(--text-muted);
+    font-size: 0.8em;
+    margin-top: 2px;
 }

@@ -4,6 +4,10 @@ import { MessageRenderer } from "./renderer";
 import { StreamHandler } from "./stream-handler";
 import type { ChatMessage } from "./message-types";
 import { generateMessageId } from "./message-types";
+import { ChatInput } from "./input";
+import type { Attachment } from "./input";
+import { CommandSuggest } from "./commands";
+import { AttachmentPicker } from "./attachments";
 
 export const VIEW_TYPE_PI_CHAT = "pi-chat-view";
 
@@ -17,6 +21,10 @@ export class PiChatView extends ItemView {
     private streamHandler: StreamHandler;
     private messagesContainer: HTMLElement;
     private inputContainer: HTMLElement;
+    private chatInput: ChatInput | null = null;
+    private commandSuggest: CommandSuggest;
+    private attachmentPicker: AttachmentPicker;
+    private abortBtn: HTMLButtonElement | null = null;
     private messages: ChatMessage[] = [];
 
     /** Currently streaming assistant message element, used for live re-rendering */
@@ -29,6 +37,8 @@ export class PiChatView extends ItemView {
         super(leaf);
         this.plugin = plugin;
         this.renderer = new MessageRenderer(this.app);
+        this.commandSuggest = new CommandSuggest(this.app);
+        this.attachmentPicker = new AttachmentPicker(this.app);
         this.streamHandler = new StreamHandler({
             onMessageUpdate: (msg) => this.handleStreamUpdate(msg),
             onMessageComplete: (msg) => this.handleStreamComplete(msg),
@@ -58,12 +68,23 @@ export class PiChatView extends ItemView {
         // Scrollable messages area
         this.messagesContainer = container.createDiv({ cls: "pi-messages" });
 
-        // Input placeholder — Phase 3 will replace this with the real input component
+        // Input container with ChatInput, abort button, and attachment support
         this.inputContainer = container.createDiv({ cls: "pi-input-container" });
-        this.inputContainer.createEl("span", {
-            text: "Input will be added in Phase 3",
-            cls: "pi-input-placeholder",
+        this.chatInput = new ChatInput(this.inputContainer, {
+            onSend: (text, attachments) => this.sendMessage(text, attachments),
+            onSlashTyped: () => this.triggerCommandSuggest(),
+            onAtTyped: () => this.triggerFilePicker(),
         });
+
+        // Add abort button to the input area (hidden by default)
+        this.abortBtn = this.chatInput.getInputAreaEl().createEl("button", {
+            cls: "pi-abort-btn",
+            text: "Abort",
+            attr: { style: "display: none;" },
+        });
+        this.abortBtn.addEventListener("click", () => this.abortStream());
+
+        this.chatInput.focus();
     }
 
     async onClose(): Promise<void> {
@@ -75,6 +96,13 @@ export class PiChatView extends ItemView {
             this.streamingComponent.unload();
             this.streamingComponent = null;
         }
+
+        // Clean up input components
+        if (this.chatInput) {
+            this.chatInput.destroy();
+            this.chatInput = null;
+        }
+        this.abortBtn = null;
 
         // Clear view state
         this.messages = [];
@@ -123,22 +151,122 @@ export class PiChatView extends ItemView {
     connectToRpc(): void {
         const conn = this.plugin.ensureConnection();
         conn.onEvent((event) => this.streamHandler.handleEvent(event));
+        this.commandSuggest.setConnection(conn);
     }
 
     /**
-     * Send a user message to Pi.
+     * Send a user message to Pi, with optional attachments and images.
      */
-    sendMessage(text: string): void {
+    sendMessage(text: string, attachments: Attachment[] = []): void {
+        // Build the display text (include attachment names)
+        let displayText = text;
+        const fileAttachments = attachments.filter((a) => a.type === "file");
+        if (fileAttachments.length > 0) {
+            const names = fileAttachments.map((a) => a.name).join(", ");
+            displayText += `\n\n📎 Attached: ${names}`;
+        }
+        const imageAttachments = attachments.filter((a) => a.type === "image");
+        if (imageAttachments.length > 0) {
+            displayText += `\n\n🖼 ${imageAttachments.length} image(s) attached`;
+        }
+
         const userMsg: ChatMessage = {
             id: generateMessageId(),
             role: "user",
-            content: text,
+            content: displayText,
             timestamp: Date.now(),
         };
         this.addMessage(userMsg);
 
+        // Disable input during streaming
+        this.setStreamingState(true);
+
+        // Build the RPC message
+        let message = text;
+
+        // Append file content as context
+        for (const att of fileAttachments) {
+            message += `\n\n---\nFile: ${att.name}\n\`\`\`\n${att.content}\n\`\`\``;
+        }
+
         const conn = this.plugin.ensureConnection();
-        conn.send({ type: "prompt", message: text });
+
+        // Build command — include images if present
+        const command: Record<string, unknown> = {
+            type: "prompt",
+            message,
+        };
+
+        if (imageAttachments.length > 0) {
+            command.images = imageAttachments.map((img) => ({
+                type: "image",
+                data: img.content,
+                mimeType: img.mimeType || "image/png",
+            }));
+        }
+
+        conn.send(command);
+    }
+
+    /**
+     * Toggle streaming state — disables/enables input, shows/hides abort button.
+     */
+    private setStreamingState(streaming: boolean): void {
+        if (this.chatInput) {
+            this.chatInput.setEnabled(!streaming);
+        }
+        if (this.abortBtn) {
+            this.abortBtn.style.display = streaming ? "inline-block" : "none";
+        }
+    }
+
+    /**
+     * Abort the current stream by sending abort command to Pi.
+     */
+    private abortStream(): void {
+        try {
+            const conn = this.plugin.ensureConnection();
+            conn.send({ type: "abort" });
+        } catch (err) {
+            console.warn("[Pi Chat] Failed to send abort:", err);
+        }
+    }
+
+    /**
+     * Trigger the `/` command suggest modal.
+     */
+    private triggerCommandSuggest(): void {
+        // Wire up the connection for fetching commands
+        try {
+            const conn = this.plugin.ensureConnection();
+            this.commandSuggest.setConnection(conn);
+        } catch {
+            // Connection may not be available yet — use fallback commands
+        }
+
+        this.commandSuggest.trigger((commandText) => {
+            if (this.chatInput) {
+                this.chatInput.setValue(commandText);
+                this.chatInput.focus();
+            }
+        });
+    }
+
+    /**
+     * Trigger the `@` file picker modal.
+     */
+    private triggerFilePicker(): void {
+        this.attachmentPicker.trigger((attachment) => {
+            if (this.chatInput) {
+                // Remove the `@` character that triggered this
+                const current = this.chatInput.getValue();
+                if (current.endsWith("@")) {
+                    this.chatInput.setValue(current.slice(0, -1));
+                }
+                this.chatInput.addAttachment(attachment);
+                this.chatInput.focus();
+            }
+        });
     }
 
     /**
@@ -168,6 +296,12 @@ export class PiChatView extends ItemView {
      * Handle stream completion — do full markdown render and finalize the message.
      */
     private handleStreamComplete(msg: ChatMessage): void {
+        // Re-enable input
+        this.setStreamingState(false);
+        if (this.chatInput) {
+            this.chatInput.focus();
+        }
+
         // If we were streaming, do a final markdown render
         if (this.streamingMessageEl) {
             // Clean up any previous streaming component
