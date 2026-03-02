@@ -12,7 +12,7 @@ export interface PiPluginSettings {
 }
 
 export const DEFAULT_SETTINGS: PiPluginSettings = {
-    piBinaryPath: "pi",
+    piBinaryPath: "/home/lemoneater/.local/bin/pi",
     workingDirectory: "",  // empty = vault root
     defaultProvider: "",
     defaultModel: "",
