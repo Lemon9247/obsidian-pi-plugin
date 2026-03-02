@@ -61,6 +61,9 @@ export class StreamHandler {
             case 'tool_execution_end':
                 this.handleToolExecutionEnd(event);
                 break;
+            case 'agent_end':
+                this.handleAgentEnd(event);
+                break;
             case 'auto_compaction_end':
                 if (this.callbacks.onCompaction) {
                     this.callbacks.onCompaction();
@@ -262,6 +265,21 @@ export class StreamHandler {
 
         if (this.callbacks.onToolExecutionUpdate) {
             this.callbacks.onToolExecutionUpdate(toolCallId, toolName, resultText);
+        }
+    }
+
+    /**
+     * Handle agent_end events which may contain entry IDs for fork support.
+     * TODO P4-T6: Extract entry IDs from the messages array and map them
+     * to our ChatMessages via piEntryId. This is needed for the fork feature
+     * which sends { type: 'fork', entryId: '<id>' } to Pi.
+     */
+    private handleAgentEnd(event: Record<string, unknown>): void {
+        // agent_end may include the full message history with Pi's internal IDs
+        const messages = event.messages as Array<Record<string, unknown>> | undefined;
+        if (Array.isArray(messages)) {
+            console.log("[StreamHandler] agent_end received with", messages.length, "messages");
+            // Future: map these IDs to ChatMessages for fork support
         }
     }
 
