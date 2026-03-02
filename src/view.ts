@@ -90,6 +90,9 @@ export class PiChatView extends ItemView {
         this.abortBtn.addEventListener("click", () => this.abortStream());
 
         this.chatInput.focus();
+
+        // Wire up RPC event stream so responses are rendered
+        this.connectToRpc();
     }
 
     async onClose(): Promise<void> {
