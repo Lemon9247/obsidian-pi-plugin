@@ -95,7 +95,12 @@ export class PiChatView extends ItemView {
     async onClose(): Promise<void> {
         // Auto-save conversation before closing (skip read-only loaded sessions)
         if (!this.readOnly) {
-            await this.autoSave();
+            try {
+                await this.autoSave();
+            } catch (err) {
+                console.error("[Pi Chat] Failed to auto-save on close:", err);
+                // Continue with cleanup even if save fails
+            }
         }
 
         // Clean up streaming state
@@ -284,6 +289,30 @@ export class PiChatView extends ItemView {
 
         // Re-enable input
         this.setReadOnly(false);
+    }
+
+    /**
+     * Reset view state after an RPC disconnect during streaming.
+     * Re-enables input, clears streaming state, and annotates any
+     * partial assistant message with a connection-lost marker.
+     */
+    handleDisconnect(): void {
+        this.streamHandler.reset();
+        this.setStreamingState(false);
+
+        if (this.streamingMessageEl) {
+            const contentEl = this.streamingMessageEl.querySelector(".pi-message-content");
+            if (contentEl) {
+                const existing = (contentEl as HTMLElement).getText();
+                (contentEl as HTMLElement).setText(existing + "\n\n*[Connection lost]*");
+            }
+            this.streamingMessageEl = null;
+        }
+
+        if (this.streamingComponent) {
+            this.streamingComponent.unload();
+            this.streamingComponent = null;
+        }
     }
 
     /**

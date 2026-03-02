@@ -40,18 +40,28 @@ export class SessionManager {
 
         await this.ensureDirectory(settings.sessionSaveDir, vault);
 
-        // Check for collision (unlikely but possible within same minute)
-        if (await vault.adapter.exists(filePath)) {
-            // Append a random suffix
-            const base = filePath.replace(/\.md$/, "");
-            const suffix = Math.random().toString(36).slice(2, 6);
-            const altPath = `${base}-${suffix}.md`;
-            await vault.create(altPath, markdown);
-            return altPath;
+        // Retry with random suffix on collision (avoids TOCTOU race
+        // where two concurrent saves could both pass an exists() check)
+        const maxAttempts = 5;
+        for (let attempt = 0; attempt < maxAttempts; attempt++) {
+            const targetPath = attempt === 0
+                ? filePath
+                : `${filePath.replace(/\.md$/, "")}-${Math.random().toString(36).slice(2, 6)}.md`;
+            try {
+                await vault.create(targetPath, markdown);
+                return targetPath;
+            } catch (err) {
+                if (err instanceof Error && err.message.includes("already exists")) {
+                    if (attempt >= maxAttempts - 1) {
+                        throw new Error(`Failed to save session after ${maxAttempts} attempts: file collision`);
+                    }
+                    continue;
+                }
+                throw err; // Re-throw non-collision errors
+            }
         }
 
-        await vault.create(filePath, markdown);
-        return filePath;
+        return null; // Unreachable, satisfies TypeScript
     }
 
     /**
@@ -111,12 +121,17 @@ export class SessionManager {
                 i++;
                 const contentLines: string[] = [];
                 while (i < lines.length && lines[i].startsWith(">")) {
-                    // Strip "> " or ">" prefix
+                    // Strip "> " or ">" prefix, then unescape callout markers
                     const stripped = lines[i].startsWith("> ")
                         ? lines[i].slice(2)
                         : lines[i].slice(1);
-                    contentLines.push(stripped);
+                    contentLines.push(this.unescapeCalloutMarker(stripped));
                     i++;
+                }
+                // Warn if callout ended unexpectedly (missing > prefix)
+                if (i < lines.length && lines[i].trim() !== "" &&
+                    !lines[i].startsWith("> [!")) {
+                    console.warn(`[Session Parser] Malformed user callout at line ${i + 1}: expected > prefix or blank line`);
                 }
                 messages.push({
                     id: generateMessageId(),
@@ -133,8 +148,13 @@ export class SessionManager {
                     const stripped = lines[i].startsWith("> ")
                         ? lines[i].slice(2)
                         : lines[i].slice(1);
-                    contentLines.push(stripped);
+                    contentLines.push(this.unescapeCalloutMarker(stripped));
                     i++;
+                }
+                // Warn if callout ended unexpectedly (missing > prefix)
+                if (i < lines.length && lines[i].trim() !== "" &&
+                    !lines[i].startsWith("> [!")) {
+                    console.warn(`[Session Parser] Malformed tool callout at line ${i + 1}: expected > prefix or blank line`);
                 }
                 messages.push({
                     id: generateMessageId(),
@@ -182,7 +202,7 @@ export class SessionManager {
 
     private formatUserMessage(msg: ChatMessage): string {
         const lines = msg.content.split("\n");
-        const calloutBody = lines.map((l) => `> ${l}`).join("\n");
+        const calloutBody = lines.map((l) => `> ${this.escapeCalloutMarker(l)}`).join("\n");
         return `> [!user]\n${calloutBody}\n\n`;
     }
 
@@ -193,12 +213,13 @@ export class SessionManager {
     private formatToolMessage(msg: ChatMessage): string {
         const name = msg.toolName || "tool";
         const lines = msg.content.split("\n");
-        const calloutBody = lines.map((l) => `> ${l}`).join("\n");
+        const calloutBody = lines.map((l) => `> ${this.escapeCalloutMarker(l)}`).join("\n");
         // Collapsed callout (- after type) keeps tool output folded by default
         return `> [!tool]- ${name}\n${calloutBody}\n\n`;
     }
 
     private generateFilePath(settings: PiPluginSettings): string {
+        const dir = this.normalizeDir(settings.sessionSaveDir);
         const now = new Date();
         const pad = (n: number) => String(n).padStart(2, "0");
         const filename = [
@@ -208,13 +229,22 @@ export class SessionManager {
             pad(now.getHours()),
             pad(now.getMinutes()),
         ].join("-") + ".md";
-        return `${settings.sessionSaveDir}/${filename}`;
+        return `${dir}/${filename}`;
     }
 
     private async ensureDirectory(dir: string, vault: Vault): Promise<void> {
-        if (!(await vault.adapter.exists(dir))) {
-            await vault.createFolder(dir);
+        const normalized = this.normalizeDir(dir);
+        if (!(await vault.adapter.exists(normalized))) {
+            await vault.createFolder(normalized);
         }
+    }
+
+    /**
+     * Normalize a vault-relative directory path: strip leading/trailing
+     * slashes and fall back to a default if empty.
+     */
+    private normalizeDir(dir: string): string {
+        return dir.replace(/^\/+|\/+$/g, "") || "Pi-Sessions";
     }
 
     private stripFrontmatter(content: string): string {
@@ -235,5 +265,27 @@ export class SessionManager {
             return match[1].replace(/:$/, "");
         }
         return "tool";
+    }
+
+    /**
+     * Escape lines that start with [! so they won't be parsed as callout
+     * boundaries when the content is reloaded. Uses \[! which is visible
+     * but unambiguous.
+     */
+    private escapeCalloutMarker(line: string): string {
+        if (line.startsWith("[!")) {
+            return "\\" + line;
+        }
+        return line;
+    }
+
+    /**
+     * Reverse the escaping applied by escapeCalloutMarker.
+     */
+    private unescapeCalloutMarker(line: string): string {
+        if (line.startsWith("\\[!")) {
+            return line.slice(1);
+        }
+        return line;
     }
 }

@@ -203,13 +203,18 @@ export default class PiPlugin extends Plugin {
         // Save current conversation if it has content
         if (view.hasMessages()) {
             try {
-                await view.autoSave();
+                const savedPath = await view.autoSave();
+                if (!savedPath) {
+                    new Notice("Warning: Session not saved (persistence disabled or empty)");
+                }
             } catch (err) {
-                console.warn("[Pi Plugin] Auto-save before new session failed:", err);
+                console.error("[Pi Plugin] Auto-save before new session failed:", err);
+                new Notice("Failed to save current session. New session cancelled.");
+                return;
             }
         }
 
-        // Clear the view
+        // Clear the view (only reached if save succeeded or conversation was empty)
         view.clearMessages();
 
         // Tell Pi to start a new session
@@ -271,6 +276,10 @@ export default class PiPlugin extends Plugin {
         });
 
         this.connection.onDisconnect(() => {
+            const view = this.getActiveView();
+            if (view) {
+                view.handleDisconnect();
+            }
             new Notice("Pi disconnected. Use 'Pi: Send prompt' to reconnect.");
             this.connection = null;
         });

@@ -65,11 +65,14 @@ export async function buildSessionEntries(
 ): Promise<SessionEntry[]> {
     const entries: SessionEntry[] = [];
 
+    // Normalize: strip leading/trailing slashes to avoid path matching bugs
+    const normalizedDir = sessionDir.replace(/^\/+|\/+$/g, "") || "Pi-Sessions";
+
     const files = app.vault
         .getFiles()
         .filter(
             (f) =>
-                f.path.startsWith(sessionDir + "/") &&
+                f.path.startsWith(normalizedDir + "/") &&
                 f.extension === "md",
         );
 
@@ -77,11 +80,15 @@ export async function buildSessionEntries(
     files.sort((a, b) => b.stat.mtime - a.stat.mtime);
 
     for (const file of files) {
-        const content = await app.vault.cachedRead(file);
-        const preview = extractPreview(content);
-        const date = formatFileDate(file.basename);
-
-        entries.push({ file, date, preview });
+        try {
+            const content = await app.vault.cachedRead(file);
+            const preview = extractPreview(content);
+            const date = formatFileDate(file.basename);
+            entries.push({ file, date, preview });
+        } catch (err) {
+            console.warn(`[Session List] Failed to read ${file.path}:`, err);
+            // Skip this file and continue with others
+        }
     }
 
     return entries;
