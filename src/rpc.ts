@@ -10,14 +10,16 @@ export type EventHandler = (event: Record<string, unknown>) => void;
 export class PiConnection {
     private piBinaryPath: string;
     private cwd: string;
+    private extraArgs: string[];
     private process: ChildProcess | null = null;
     private readline: ReadlineInterface | null = null;
     private handlers: EventHandler[] = [];
     private connected = false;
 
-    constructor(piBinaryPath: string, cwd: string) {
+    constructor(piBinaryPath: string, cwd: string, extraArgs: string[] = []) {
         this.piBinaryPath = piBinaryPath;
         this.cwd = cwd;
+        this.extraArgs = extraArgs;
     }
 
     /**
@@ -28,7 +30,7 @@ export class PiConnection {
             this.destroy();
         }
 
-        this.process = spawn(this.piBinaryPath, ["--mode", "rpc", "--no-session"], {
+        this.process = spawn(this.piBinaryPath, ["--mode", "rpc", "--no-session", ...this.extraArgs], {
             cwd: this.cwd,
             stdio: ["pipe", "pipe", "pipe"],
             env: { ...process.env },

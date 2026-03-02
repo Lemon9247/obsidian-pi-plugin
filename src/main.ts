@@ -60,7 +60,15 @@ export default class PiPlugin extends Plugin {
         const vaultRoot = (adapter as any).getBasePath();
         const cwd = this.settings.workingDirectory || vaultRoot;
 
-        this.connection = new PiConnection(this.settings.piBinaryPath, cwd);
+        const args: string[] = [];
+        if (this.settings.defaultProvider) {
+            args.push("--provider", this.settings.defaultProvider);
+        }
+        if (this.settings.defaultModel) {
+            args.push("--model", this.settings.defaultModel);
+        }
+
+        this.connection = new PiConnection(this.settings.piBinaryPath, cwd, args);
 
         this.connection.onEvent((event) => {
             console.log("[Pi RPC] Event:", event);
