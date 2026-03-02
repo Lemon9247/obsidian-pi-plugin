@@ -86,13 +86,13 @@ export default class PiPlugin extends Plugin {
     /**
      * Send a test prompt to Pi and log all received events.
      */
-    private sendTestPrompt(): void {
+    private async sendTestPrompt(): Promise<void> {
         try {
             const conn = this.ensureConnection();
 
             new Notice("Sending prompt to Pi...");
 
-            conn.send({
+            await conn.send({
                 type: "prompt",
                 message: "Hello from Obsidian!",
             });

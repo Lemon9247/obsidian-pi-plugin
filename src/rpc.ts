@@ -16,6 +16,11 @@ export class PiConnection {
     private handlers: EventHandler[] = [];
     private disconnectHandler: (() => void) | null = null;
     private connected = false;
+    private requestId = 0;
+    private pendingRequests: Map<string, {
+        resolve: (value: Record<string, unknown>) => void;
+        reject: (reason: Error) => void;
+    }> = new Map();
 
     constructor(piBinaryPath: string, cwd: string, extraArgs: string[] = []) {
         this.piBinaryPath = piBinaryPath;
@@ -89,14 +94,37 @@ export class PiConnection {
 
     /**
      * Send a command to Pi via stdin as a JSON line.
+     * Automatically injects a request ID and returns a Promise that resolves
+     * when Pi sends a matching response (type === "response" with same id).
+     * Streaming events still go to onEvent handlers.
      */
-    send(command: Record<string, unknown>): void {
+    send(command: Record<string, unknown>): Promise<Record<string, unknown>> {
         if (!this.process || !this.process.stdin || !this.connected) {
             throw new Error("Pi is not connected");
         }
 
-        const line = JSON.stringify(command) + "\n";
-        this.process.stdin.write(line);
+        const id = `req-${this.requestId++}`;
+        const line = JSON.stringify({ ...command, id }) + "\n";
+
+        return new Promise((resolve, reject) => {
+            this.pendingRequests.set(id, { resolve, reject });
+
+            const timeout = setTimeout(() => {
+                if (this.pendingRequests.has(id)) {
+                    this.pendingRequests.delete(id);
+                    reject(new Error(`Request ${id} timed out after 30s`));
+                }
+            }, 30_000);
+
+            // Clear timeout when the request settles
+            const original = this.pendingRequests.get(id)!;
+            this.pendingRequests.set(id, {
+                resolve: (value) => { clearTimeout(timeout); original.resolve(value); },
+                reject: (reason) => { clearTimeout(timeout); original.reject(reason); },
+            });
+
+            this.process!.stdin!.write(line);
+        });
     }
 
     /**
@@ -143,6 +171,21 @@ export class PiConnection {
     }
 
     private dispatch(event: Record<string, unknown>): void {
+        // Route responses to pending request Promises
+        if (event.type === "response" && typeof event.id === "string") {
+            const pending = this.pendingRequests.get(event.id);
+            if (pending) {
+                this.pendingRequests.delete(event.id);
+                if (event.success === false) {
+                    pending.reject(new Error(String(event.error || "Request failed")));
+                } else {
+                    pending.resolve(event);
+                }
+                return;
+            }
+        }
+
+        // Non-response events go to streaming handlers
         for (const handler of this.handlers) {
             try {
                 handler(event);
@@ -160,6 +203,13 @@ export class PiConnection {
             this.readline = null;
         }
         this.process = null;
+
+        // Reject all pending requests
+        for (const [, pending] of this.pendingRequests) {
+            pending.reject(new Error("Pi connection closed"));
+        }
+        this.pendingRequests.clear();
+
         if (wasConnected && this.disconnectHandler) {
             this.disconnectHandler();
         }
