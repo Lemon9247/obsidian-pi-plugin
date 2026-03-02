@@ -70,7 +70,7 @@ export default class PiPlugin extends Plugin {
 
             conn.send({
                 type: "prompt",
-                content: "Hello from Obsidian!",
+                message: "Hello from Obsidian!",
             });
         } catch (err) {
             const msg = err instanceof Error ? err.message : String(err);
