@@ -121,10 +121,18 @@ export class StreamHandler {
     private handleMessageUpdate(event: Record<string, unknown>): void {
         if (!this.currentMessage) return;
 
-        const ame = event.assistantMessageEvent as Record<string, unknown> | undefined;
-        if (!ame) return;
+        const rawAme = event.assistantMessageEvent;
+        if (!rawAme || typeof rawAme !== 'object') {
+            console.warn("[StreamHandler] Invalid message_update event: missing assistantMessageEvent", event);
+            return;
+        }
+        const ame = rawAme as Record<string, unknown>;
 
-        const deltaType = ame.type as string;
+        const deltaType = ame.type;
+        if (typeof deltaType !== 'string') {
+            console.warn("[StreamHandler] Invalid assistantMessageEvent: missing or non-string type", ame);
+            return;
+        }
 
         switch (deltaType) {
             case 'text_delta': {
@@ -201,8 +209,15 @@ export class StreamHandler {
                 }
                 break;
             }
-            // text_start, text_end, thinking_start, thinking_end, start:
-            // No action needed — we accumulate via deltas
+            case 'start':
+            case 'text_start':
+            case 'text_end':
+            case 'thinking_start':
+            case 'thinking_end':
+                // No action needed — we accumulate text via deltas
+                break;
+            default:
+                console.warn("[StreamHandler] Unknown assistantMessageEvent type:", deltaType, ame);
         }
     }
 
@@ -219,8 +234,13 @@ export class StreamHandler {
     }
 
     private handleToolExecutionStart(event: Record<string, unknown>): void {
-        const toolCallId = event.toolCallId as string;
-        const toolName = event.toolName as string;
+        const toolCallId = event.toolCallId;
+        const toolName = event.toolName;
+        if (typeof toolCallId !== 'string' || typeof toolName !== 'string') {
+            console.warn("[StreamHandler] Invalid tool_execution_start: missing toolCallId or toolName", event);
+            return;
+        }
+
         const args = (event.args as Record<string, unknown>) ?? {};
 
         if (this.callbacks.onToolExecutionStart) {
@@ -229,8 +249,12 @@ export class StreamHandler {
     }
 
     private handleToolExecutionUpdate(event: Record<string, unknown>): void {
-        const toolCallId = event.toolCallId as string;
-        const toolName = event.toolName as string;
+        const toolCallId = event.toolCallId;
+        const toolName = event.toolName;
+        if (typeof toolCallId !== 'string' || typeof toolName !== 'string') {
+            console.warn("[StreamHandler] Invalid tool_execution_update: missing toolCallId or toolName", event);
+            return;
+        }
 
         // partialResult.content is an array of {type: "text", text: "..."} blocks
         const partialResult = event.partialResult as Record<string, unknown> | undefined;
@@ -242,8 +266,13 @@ export class StreamHandler {
     }
 
     private handleToolExecutionEnd(event: Record<string, unknown>): void {
-        const toolCallId = event.toolCallId as string;
-        const toolName = event.toolName as string;
+        const toolCallId = event.toolCallId;
+        const toolName = event.toolName;
+        if (typeof toolCallId !== 'string' || typeof toolName !== 'string') {
+            console.warn("[StreamHandler] Invalid tool_execution_end: missing toolCallId or toolName", event);
+            return;
+        }
+
         const isError = (event.isError as boolean) ?? false;
 
         // Extract result text from content blocks

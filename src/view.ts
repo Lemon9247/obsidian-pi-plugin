@@ -1,4 +1,4 @@
-import { ItemView, MarkdownRenderer, Notice, WorkspaceLeaf } from "obsidian";
+import { Component, ItemView, MarkdownRenderer, Notice, WorkspaceLeaf } from "obsidian";
 import type PiPlugin from "./main";
 import { MessageRenderer } from "./renderer";
 import { StreamHandler } from "./stream-handler";
@@ -21,6 +21,9 @@ export class PiChatView extends ItemView {
 
     /** Currently streaming assistant message element, used for live re-rendering */
     private streamingMessageEl: HTMLElement | null = null;
+
+    /** Component for the final markdown render after streaming completes */
+    private streamingComponent: Component | null = null;
 
     constructor(leaf: WorkspaceLeaf, plugin: PiPlugin) {
         super(leaf);
@@ -64,6 +67,16 @@ export class PiChatView extends ItemView {
     }
 
     async onClose(): Promise<void> {
+        // Clean up streaming state
+        this.streamHandler.reset();
+
+        // Unload any active streaming component
+        if (this.streamingComponent) {
+            this.streamingComponent.unload();
+            this.streamingComponent = null;
+        }
+
+        // Clear view state
         this.messages = [];
         this.streamingMessageEl = null;
         this.contentEl.empty();
@@ -93,10 +106,15 @@ export class PiChatView extends ItemView {
     }
 
     /**
-     * Scroll the messages container to the bottom.
+     * Scroll the messages container to the bottom, but only if user is already near the bottom.
+     * This prevents forcibly scrolling the user away from content they're reading.
      */
     scrollToBottom(): void {
-        this.messagesContainer.scrollTop = this.messagesContainer.scrollHeight;
+        const el = this.messagesContainer;
+        const isAtBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 50;
+        if (isAtBottom) {
+            el.scrollTop = el.scrollHeight;
+        }
     }
 
     /**
@@ -124,41 +142,58 @@ export class PiChatView extends ItemView {
     }
 
     /**
-     * Handle streaming text update — re-render markdown live.
+     * Handle streaming text update — use plaintext during streaming for performance.
+     * Full markdown rendering happens on completion in handleStreamComplete().
      */
     private handleStreamUpdate(msg: ChatMessage): void {
         if (!this.streamingMessageEl) {
-            // First delta — create the assistant message container
-            this.streamingMessageEl = this.renderer.renderAssistantMessage(
-                this.messagesContainer,
-                msg.content,
-                "",
-                this,
-            );
-        } else {
-            // Re-render: clear content div and re-render markdown
-            const contentEl = this.streamingMessageEl.querySelector(".pi-message-content");
-            if (contentEl) {
-                contentEl.empty();
-                if (msg.content) {
-                    MarkdownRenderer.render(this.app, msg.content, contentEl as HTMLElement, "", this);
-                }
-            }
+            // First delta — create the assistant message container with plaintext
+            this.streamingMessageEl = this.messagesContainer.createDiv({
+                cls: "pi-message pi-message-assistant",
+            });
+            const label = this.streamingMessageEl.createDiv({ cls: "pi-message-label" });
+            label.createSpan({ text: "Pi", cls: "pi-message-label-text" });
+            this.streamingMessageEl.createDiv({ cls: "pi-message-content" });
+        }
+
+        // Update plaintext content — no markdown parsing during streaming
+        const contentEl = this.streamingMessageEl.querySelector(".pi-message-content");
+        if (contentEl) {
+            (contentEl as HTMLElement).setText(msg.content);
         }
         this.scrollToBottom();
     }
 
     /**
-     * Handle stream completion — finalize the message.
+     * Handle stream completion — do full markdown render and finalize the message.
      */
     private handleStreamComplete(msg: ChatMessage): void {
-        // If we were streaming, do a final re-render
+        // If we were streaming, do a final markdown render
         if (this.streamingMessageEl) {
+            // Clean up any previous streaming component
+            if (this.streamingComponent) {
+                this.streamingComponent.unload();
+                this.streamingComponent = null;
+            }
+
             const contentEl = this.streamingMessageEl.querySelector(".pi-message-content");
             if (contentEl) {
                 contentEl.empty();
                 if (msg.content) {
-                    MarkdownRenderer.render(this.app, msg.content, contentEl as HTMLElement, "", this);
+                    this.streamingComponent = new Component();
+                    this.streamingComponent.load();
+                    try {
+                        MarkdownRenderer.render(
+                            this.app,
+                            msg.content,
+                            contentEl as HTMLElement,
+                            "",
+                            this.streamingComponent,
+                        );
+                    } catch (err) {
+                        console.error("[Pi Chat] Markdown rendering error:", err);
+                        (contentEl as HTMLElement).setText(msg.content);
+                    }
                 }
             }
 
@@ -167,39 +202,52 @@ export class PiChatView extends ItemView {
                 const thinkingEl = this.streamingMessageEl.createEl("details", { cls: "pi-thinking" });
                 thinkingEl.createEl("summary", { text: "Thinking..." });
                 const thinkingContent = thinkingEl.createDiv({ cls: "pi-thinking-content" });
-                MarkdownRenderer.render(this.app, msg.thinkingContent, thinkingContent, "", this);
+                try {
+                    MarkdownRenderer.render(this.app, msg.thinkingContent, thinkingContent, "", this);
+                } catch (err) {
+                    console.error("[Pi Chat] Thinking render error:", err);
+                    thinkingContent.setText(msg.thinkingContent);
+                }
             }
 
             this.streamingMessageEl = null;
         }
 
+        // Always push message, even if the streaming element was cleaned up
         this.messages.push(msg);
         this.scrollToBottom();
     }
 
     private renderMessage(msg: ChatMessage): void {
-        switch (msg.role) {
-            case "user":
-                this.renderer.renderUserMessage(this.messagesContainer, msg.content);
-                break;
-            case "assistant":
-                this.renderer.renderAssistantMessage(
-                    this.messagesContainer,
-                    msg.content,
-                    "",
-                    this,
-                );
-                break;
-            case "tool":
-                this.renderer.renderToolCall(
-                    this.messagesContainer,
-                    msg.toolName ?? "tool",
-                    "",
-                    msg.content,
-                    msg.isError ?? false,
-                    this,
-                );
-                break;
+        try {
+            switch (msg.role) {
+                case "user":
+                    this.renderer.renderUserMessage(this.messagesContainer, msg.content);
+                    break;
+                case "assistant":
+                    this.renderer.renderAssistantMessage(
+                        this.messagesContainer,
+                        msg.content,
+                        "",
+                        this,
+                    );
+                    break;
+                case "tool":
+                    this.renderer.renderToolCall(
+                        this.messagesContainer,
+                        msg.toolName ?? "tool",
+                        "",
+                        msg.content,
+                        msg.isError ?? false,
+                        this,
+                    );
+                    break;
+            }
+        } catch (err) {
+            console.error("[Pi Chat] Message render error:", err);
+            const errorEl = this.messagesContainer.createDiv({ cls: "pi-message pi-render-error" });
+            errorEl.createEl("p", { text: "⚠️ Failed to render message" });
+            errorEl.createEl("pre", { text: msg.content });
         }
     }
 }

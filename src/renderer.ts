@@ -28,7 +28,12 @@ export class MessageRenderer {
         const contentEl = wrapper.createDiv({ cls: "pi-message-content" });
 
         if (markdown) {
-            MarkdownRenderer.render(this.app, markdown, contentEl, sourcePath, component);
+            try {
+                MarkdownRenderer.render(this.app, markdown, contentEl, sourcePath, component);
+            } catch (err) {
+                console.error("[Pi Chat] Markdown rendering error:", err);
+                contentEl.setText(markdown);
+            }
         }
 
         return wrapper;
@@ -91,13 +96,19 @@ export class MessageRenderer {
 
             // If result looks like it contains code or markdown, render it
             if (this.looksLikeMarkdown(result)) {
-                MarkdownRenderer.render(
-                    this.app,
-                    result,
-                    resultContent,
-                    "",
-                    component,
-                );
+                try {
+                    MarkdownRenderer.render(
+                        this.app,
+                        result,
+                        resultContent,
+                        "",
+                        component,
+                    );
+                } catch (err) {
+                    console.error("[Pi Chat] Tool result render error:", err);
+                    const pre = resultContent.createEl("pre");
+                    pre.createEl("code", { text: result });
+                }
             } else {
                 const pre = resultContent.createEl("pre");
                 pre.createEl("code", { text: result });
