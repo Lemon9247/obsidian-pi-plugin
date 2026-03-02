@@ -45,8 +45,19 @@ export default class PiPlugin extends Plugin {
             return this.connection;
         }
 
+        // Destroy old dead connection if it exists
+        if (this.connection) {
+            this.connection.destroy();
+            this.connection = null;
+        }
+
         // Determine working directory: setting or vault root
-        const vaultRoot = (this.app.vault.adapter as { getBasePath?(): string }).getBasePath?.() ?? ".";
+        const adapter = this.app.vault.adapter;
+        if (!('getBasePath' in adapter) || typeof (adapter as any).getBasePath !== 'function') {
+            new Notice("Cannot determine vault path (mobile not supported)");
+            throw new Error("Vault adapter does not support getBasePath");
+        }
+        const vaultRoot = (adapter as any).getBasePath();
         const cwd = this.settings.workingDirectory || vaultRoot;
 
         this.connection = new PiConnection(this.settings.piBinaryPath, cwd);
