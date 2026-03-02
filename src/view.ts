@@ -8,6 +8,7 @@ import { ChatInput } from "./input";
 import type { Attachment } from "./input";
 import { CommandSuggest } from "./commands";
 import { AttachmentPicker } from "./attachments";
+import { SessionManager } from "./sessions";
 
 export const VIEW_TYPE_PI_CHAT = "pi-chat-view";
 
@@ -19,13 +20,16 @@ export class PiChatView extends ItemView {
     plugin: PiPlugin;
     private renderer: MessageRenderer;
     private streamHandler: StreamHandler;
+    private sessionManager: SessionManager;
     private messagesContainer: HTMLElement;
     private inputContainer: HTMLElement;
     private chatInput: ChatInput | null = null;
     private commandSuggest: CommandSuggest;
     private attachmentPicker: AttachmentPicker;
     private abortBtn: HTMLButtonElement | null = null;
+    private readOnlyBanner: HTMLElement | null = null;
     private messages: ChatMessage[] = [];
+    private readOnly = false;
 
     /** Currently streaming assistant message element, used for live re-rendering */
     private streamingMessageEl: HTMLElement | null = null;
@@ -37,6 +41,7 @@ export class PiChatView extends ItemView {
         super(leaf);
         this.plugin = plugin;
         this.renderer = new MessageRenderer(this.app);
+        this.sessionManager = new SessionManager();
         this.commandSuggest = new CommandSuggest(this.app);
         this.attachmentPicker = new AttachmentPicker(this.app);
         this.streamHandler = new StreamHandler({
@@ -88,6 +93,11 @@ export class PiChatView extends ItemView {
     }
 
     async onClose(): Promise<void> {
+        // Auto-save conversation before closing (skip read-only loaded sessions)
+        if (!this.readOnly) {
+            await this.autoSave();
+        }
+
         // Clean up streaming state
         this.streamHandler.reset();
 
@@ -103,9 +113,11 @@ export class PiChatView extends ItemView {
             this.chatInput = null;
         }
         this.abortBtn = null;
+        this.readOnlyBanner = null;
 
         // Clear view state
         this.messages = [];
+        this.readOnly = false;
         this.streamingMessageEl = null;
         this.contentEl.empty();
     }
@@ -158,6 +170,11 @@ export class PiChatView extends ItemView {
      * Send a user message to Pi, with optional attachments and images.
      */
     sendMessage(text: string, attachments: Attachment[] = []): void {
+        if (this.readOnly) {
+            new Notice("This is a saved session (read-only). Start a new session to chat.");
+            return;
+        }
+
         // Build the display text (include attachment names)
         let displayText = text;
         const fileAttachments = attachments.filter((a) => a.type === "file");
@@ -211,6 +228,108 @@ export class PiChatView extends ItemView {
             console.error("[Pi Chat] Failed to send message:", err);
             new Notice("Failed to send message to Pi");
             this.setStreamingState(false);
+        }
+    }
+
+    /**
+     * Check if the conversation has any messages worth saving.
+     */
+    hasMessages(): boolean {
+        return this.messages.some((m) => m.role === "assistant");
+    }
+
+    /**
+     * Auto-save the current conversation if it has content.
+     */
+    async autoSave(): Promise<string | null> {
+        if (!this.hasMessages()) return null;
+        try {
+            const path = await this.sessionManager.saveSession(
+                this.messages,
+                this.plugin.settings,
+                this.app.vault,
+            );
+            if (path) {
+                console.log("[Pi Chat] Session saved to:", path);
+            }
+            return path;
+        } catch (err) {
+            console.error("[Pi Chat] Failed to auto-save session:", err);
+            return null;
+        }
+    }
+
+    /**
+     * Clear all messages and reset the view for a new conversation.
+     */
+    clearMessages(): void {
+        this.messages = [];
+        this.readOnly = false;
+        this.streamHandler.reset();
+
+        if (this.streamingComponent) {
+            this.streamingComponent.unload();
+            this.streamingComponent = null;
+        }
+        this.streamingMessageEl = null;
+
+        // Clear DOM
+        this.messagesContainer.empty();
+
+        // Remove read-only banner if present
+        if (this.readOnlyBanner) {
+            this.readOnlyBanner.remove();
+            this.readOnlyBanner = null;
+        }
+
+        // Re-enable input
+        this.setReadOnly(false);
+    }
+
+    /**
+     * Display a list of messages (e.g. from a loaded session).
+     * Optionally marks the view as read-only.
+     */
+    displayMessages(messages: ChatMessage[], readOnly = false): void {
+        this.clearMessages();
+        this.messages = [...messages];
+        this.readOnly = readOnly;
+
+        for (const msg of messages) {
+            this.renderMessage(msg);
+        }
+
+        if (readOnly) {
+            this.setReadOnly(true);
+        }
+
+        this.scrollToBottom();
+    }
+
+    /**
+     * Set read-only mode — disables input and shows a banner.
+     */
+    private setReadOnly(readOnly: boolean): void {
+        this.readOnly = readOnly;
+
+        if (this.chatInput) {
+            this.chatInput.setEnabled(!readOnly);
+        }
+
+        if (readOnly) {
+            if (!this.readOnlyBanner) {
+                this.readOnlyBanner = this.contentEl.createDiv({
+                    cls: "pi-readonly-banner",
+                });
+                // Insert before the input container
+                this.contentEl.insertBefore(this.readOnlyBanner, this.inputContainer);
+                this.readOnlyBanner.setText("📖 Viewing saved session");
+            }
+        } else {
+            if (this.readOnlyBanner) {
+                this.readOnlyBanner.remove();
+                this.readOnlyBanner = null;
+            }
         }
     }
 
