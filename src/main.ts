@@ -1,15 +1,50 @@
-import { Notice, Plugin, WorkspaceLeaf } from "obsidian";
+import { FuzzySuggestModal, Notice, Plugin, WorkspaceLeaf } from "obsidian";
 import { PiConnection } from "./rpc";
 import { DEFAULT_SETTINGS, PiSettingTab } from "./settings";
 import type { PiPluginSettings } from "./settings";
 import { PiChatView, VIEW_TYPE_PI_CHAT } from "./view";
 import { SessionManager } from "./sessions";
 import { SessionListModal, buildSessionEntries } from "./session-list";
+import { PiStatusBar } from "./statusbar";
+
+interface ModelOption {
+    id: string;
+    name: string;
+    provider: string;
+}
+
+/**
+ * Modal for selecting a model from Pi's available models.
+ */
+class ModelSwitchModal extends FuzzySuggestModal<ModelOption> {
+    private models: ModelOption[];
+    private onSelect: (model: ModelOption) => void;
+
+    constructor(app: import("obsidian").App, models: ModelOption[], onSelect: (model: ModelOption) => void) {
+        super(app);
+        this.models = models;
+        this.onSelect = onSelect;
+        this.setPlaceholder("Select a model...");
+    }
+
+    getItems(): ModelOption[] {
+        return this.models;
+    }
+
+    getItemText(item: ModelOption): string {
+        return `${item.name} (${item.provider})`;
+    }
+
+    onChooseItem(item: ModelOption): void {
+        this.onSelect(item);
+    }
+}
 
 export default class PiPlugin extends Plugin {
     settings: PiPluginSettings = DEFAULT_SETTINGS;
     connection: PiConnection | null = null;
     sessionManager: SessionManager = new SessionManager();
+    statusBar: PiStatusBar | null = null;
 
     async onload(): Promise<void> {
         await this.loadSettings();
@@ -58,6 +93,17 @@ export default class PiPlugin extends Plugin {
             name: "New session",
             callback: () => this.newSession(),
         });
+
+        // Model switcher
+        this.addCommand({
+            id: "pi-switch-model",
+            name: "Switch model",
+            callback: () => this.switchModel(),
+        });
+
+        // Status bar
+        const statusBarEl = this.addStatusBarItem();
+        this.statusBar = new PiStatusBar(this, statusBarEl);
 
         // TODO P4-T6: Fork from previous message
         // Requires tracking Pi's internal entry IDs from agent_end events.
@@ -272,7 +318,16 @@ export default class PiPlugin extends Plugin {
         this.connection = new PiConnection(this.settings.piBinaryPath, cwd, args);
 
         this.connection.onEvent((event) => {
-            console.log("[Pi RPC] Event:", event);
+            // Update status bar on streaming state changes
+            const type = event.type as string;
+            if (type === "agent_start") {
+                this.statusBar?.setStreaming(true);
+            } else if (type === "agent_end") {
+                this.statusBar?.setStreaming(false);
+                this.statusBar?.refreshStats();
+            } else if (type === "auto_compaction_end") {
+                new Notice("Pi conversation compacted");
+            }
         });
 
         this.connection.onDisconnect(() => {
@@ -285,7 +340,58 @@ export default class PiPlugin extends Plugin {
         });
 
         this.connection.connect();
+
+        // Refresh status bar with model info once connected
+        // Use a short delay to let Pi initialize
+        setTimeout(() => {
+            this.statusBar?.refreshModel();
+            this.statusBar?.refreshStats();
+        }, 1000);
+
         return this.connection;
+    }
+
+    /**
+     * Open modal to switch Pi's active model.
+     */
+    private async switchModel(): Promise<void> {
+        try {
+            const conn = this.ensureConnection();
+            const response = await conn.send({ type: "get_available_models" });
+            const data = response.data as Record<string, unknown> | undefined;
+            const models = (data?.models as Array<Record<string, unknown>>) ?? [];
+
+            if (models.length === 0) {
+                new Notice("No models available");
+                return;
+            }
+
+            const options: ModelOption[] = models.map((m) => ({
+                id: (m.id as string) ?? "",
+                name: (m.name as string) ?? (m.id as string) ?? "Unknown",
+                provider: (m.provider as string) ?? "",
+            })).filter((m) => m.id);
+
+            const modal = new ModelSwitchModal(this.app, options, async (selected) => {
+                try {
+                    await conn.send({
+                        type: "set_model",
+                        provider: selected.provider,
+                        modelId: selected.id,
+                    });
+                    new Notice(`Switched to ${selected.name}`);
+                    this.statusBar?.setModel(selected.name, "");
+                    this.statusBar?.refreshModel();
+                } catch (err) {
+                    const msg = err instanceof Error ? err.message : String(err);
+                    new Notice(`Failed to switch model: ${msg}`);
+                }
+            });
+            modal.open();
+        } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            new Notice(`Failed to fetch models: ${msg}`);
+        }
     }
 
     /**
