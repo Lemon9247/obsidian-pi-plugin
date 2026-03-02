@@ -74,6 +74,11 @@ export default class PiPlugin extends Plugin {
             console.log("[Pi RPC] Event:", event);
         });
 
+        this.connection.onDisconnect(() => {
+            new Notice("Pi disconnected. Use 'Pi: Send prompt' to reconnect.");
+            this.connection = null;
+        });
+
         this.connection.connect();
         return this.connection;
     }

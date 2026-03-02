@@ -14,6 +14,7 @@ export class PiConnection {
     private process: ChildProcess | null = null;
     private readline: ReadlineInterface | null = null;
     private handlers: EventHandler[] = [];
+    private disconnectHandler: (() => void) | null = null;
     private connected = false;
 
     constructor(piBinaryPath: string, cwd: string, extraArgs: string[] = []) {
@@ -117,9 +118,17 @@ export class PiConnection {
     }
 
     /**
+     * Register a handler called when the Pi process disconnects unexpectedly.
+     */
+    onDisconnect(handler: () => void): void {
+        this.disconnectHandler = handler;
+    }
+
+    /**
      * Kill the child process and clean up.
      */
     destroy(): void {
+        this.disconnectHandler = null; // Don't fire on explicit destroy
         if (this.process) {
             this.process.kill();
         }
@@ -144,11 +153,15 @@ export class PiConnection {
     }
 
     private cleanup(): void {
+        const wasConnected = this.connected;
         this.connected = false;
         if (this.readline) {
             this.readline.close();
             this.readline = null;
         }
         this.process = null;
+        if (wasConnected && this.disconnectHandler) {
+            this.disconnectHandler();
+        }
     }
 }
