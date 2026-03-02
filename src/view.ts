@@ -1,23 +1,11 @@
-import { ItemView, WorkspaceLeaf } from "obsidian";
+import { ItemView, MarkdownRenderer, Notice, WorkspaceLeaf } from "obsidian";
 import type PiPlugin from "./main";
 import { MessageRenderer } from "./renderer";
+import { StreamHandler } from "./stream-handler";
+import type { ChatMessage } from "./message-types";
+import { generateMessageId } from "./message-types";
 
 export const VIEW_TYPE_PI_CHAT = "pi-chat-view";
-
-/**
- * Represents a chat message in the UI.
- */
-export interface ChatMessage {
-    id: string;
-    role: "user" | "assistant" | "tool";
-    content: string;
-    timestamp: number;
-    toolName?: string;
-    toolCallId?: string;
-    isStreaming?: boolean;
-    isError?: boolean;
-    thinkingContent?: string;
-}
 
 /**
  * Obsidian ItemView that displays a chat conversation with Pi.
@@ -26,17 +14,25 @@ export interface ChatMessage {
 export class PiChatView extends ItemView {
     plugin: PiPlugin;
     private renderer: MessageRenderer;
+    private streamHandler: StreamHandler;
     private messagesContainer: HTMLElement;
     private inputContainer: HTMLElement;
     private messages: ChatMessage[] = [];
 
-    /** Currently streaming assistant message element, used by streaming logic */
-    streamingMessageEl: HTMLElement | null = null;
+    /** Currently streaming assistant message element, used for live re-rendering */
+    private streamingMessageEl: HTMLElement | null = null;
 
     constructor(leaf: WorkspaceLeaf, plugin: PiPlugin) {
         super(leaf);
         this.plugin = plugin;
         this.renderer = new MessageRenderer(this.app);
+        this.streamHandler = new StreamHandler({
+            onMessageUpdate: (msg) => this.handleStreamUpdate(msg),
+            onMessageComplete: (msg) => this.handleStreamComplete(msg),
+            onToolResult: (msg) => this.addMessage(msg),
+            onCompaction: () => new Notice("Pi conversation compacted"),
+            onError: (err) => new Notice(`Pi error: ${err}`),
+        });
     }
 
     getViewType(): string {
@@ -101,6 +97,84 @@ export class PiChatView extends ItemView {
      */
     scrollToBottom(): void {
         this.messagesContainer.scrollTop = this.messagesContainer.scrollHeight;
+    }
+
+    /**
+     * Wire this view to a PiConnection's event stream.
+     */
+    connectToRpc(): void {
+        const conn = this.plugin.ensureConnection();
+        conn.onEvent((event) => this.streamHandler.handleEvent(event));
+    }
+
+    /**
+     * Send a user message to Pi.
+     */
+    sendMessage(text: string): void {
+        const userMsg: ChatMessage = {
+            id: generateMessageId(),
+            role: "user",
+            content: text,
+            timestamp: Date.now(),
+        };
+        this.addMessage(userMsg);
+
+        const conn = this.plugin.ensureConnection();
+        conn.send({ type: "prompt", message: text });
+    }
+
+    /**
+     * Handle streaming text update — re-render markdown live.
+     */
+    private handleStreamUpdate(msg: ChatMessage): void {
+        if (!this.streamingMessageEl) {
+            // First delta — create the assistant message container
+            this.streamingMessageEl = this.renderer.renderAssistantMessage(
+                this.messagesContainer,
+                msg.content,
+                "",
+                this,
+            );
+        } else {
+            // Re-render: clear content div and re-render markdown
+            const contentEl = this.streamingMessageEl.querySelector(".pi-message-content");
+            if (contentEl) {
+                contentEl.empty();
+                if (msg.content) {
+                    MarkdownRenderer.render(this.app, msg.content, contentEl as HTMLElement, "", this);
+                }
+            }
+        }
+        this.scrollToBottom();
+    }
+
+    /**
+     * Handle stream completion — finalize the message.
+     */
+    private handleStreamComplete(msg: ChatMessage): void {
+        // If we were streaming, do a final re-render
+        if (this.streamingMessageEl) {
+            const contentEl = this.streamingMessageEl.querySelector(".pi-message-content");
+            if (contentEl) {
+                contentEl.empty();
+                if (msg.content) {
+                    MarkdownRenderer.render(this.app, msg.content, contentEl as HTMLElement, "", this);
+                }
+            }
+
+            // Add thinking content as a collapsed details element
+            if (msg.thinkingContent) {
+                const thinkingEl = this.streamingMessageEl.createEl("details", { cls: "pi-thinking" });
+                thinkingEl.createEl("summary", { text: "Thinking..." });
+                const thinkingContent = thinkingEl.createDiv({ cls: "pi-thinking-content" });
+                MarkdownRenderer.render(this.app, msg.thinkingContent, thinkingContent, "", this);
+            }
+
+            this.streamingMessageEl = null;
+        }
+
+        this.messages.push(msg);
+        this.scrollToBottom();
     }
 
     private renderMessage(msg: ChatMessage): void {

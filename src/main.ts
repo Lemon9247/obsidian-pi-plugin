@@ -100,7 +100,7 @@ export default class PiPlugin extends Plugin {
     /**
      * Get or create a PiConnection using current settings.
      */
-    private ensureConnection(): PiConnection {
+    ensureConnection(): PiConnection {
         if (this.connection && this.connection.isConnected()) {
             return this.connection;
         }
