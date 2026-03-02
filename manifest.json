@@ -1,0 +1,9 @@
+{
+    "id": "pi-plugin",
+    "name": "Pi",
+    "version": "0.1.0",
+    "minAppVersion": "0.15.0",
+    "description": "Chat with Pi coding agent inside Obsidian",
+    "author": "Willow",
+    "isDesktopOnly": true
+}

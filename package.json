@@ -1,0 +1,21 @@
+{
+    "name": "obsidian-pi-plugin",
+    "version": "0.1.0",
+    "description": "Chat with Pi coding agent inside Obsidian",
+    "type": "module",
+    "main": "main.js",
+    "scripts": {
+        "dev": "node esbuild.config.mjs",
+        "build": "tsc -noEmit -skipLibCheck && node esbuild.config.mjs production"
+    },
+    "keywords": [],
+    "author": "Willow",
+    "license": "MIT",
+    "devDependencies": {
+        "@types/node": "^16.11.6",
+        "esbuild": "0.25.5",
+        "obsidian": "latest",
+        "tslib": "2.4.0",
+        "typescript": "^5.8.3"
+    }
+}
