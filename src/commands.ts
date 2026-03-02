@@ -100,10 +100,12 @@ export class CommandSuggest {
             const response = await this.connection.send({ type: "get_commands" });
             const commands = response.commands as Array<Record<string, unknown>> | undefined;
             if (Array.isArray(commands)) {
-                this.cachedCommands = commands.map((cmd) => ({
-                    name: String(cmd.name || ""),
-                    description: String(cmd.description || ""),
-                }));
+                this.cachedCommands = commands
+                    .map((cmd) => ({
+                        name: String(cmd.name || ""),
+                        description: String(cmd.description || ""),
+                    }))
+                    .filter((cmd) => cmd.name.length > 0);
                 return this.cachedCommands;
             }
         } catch (err) {

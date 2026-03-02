@@ -184,9 +184,9 @@ export class PiChatView extends ItemView {
         // Build the RPC message
         let message = text;
 
-        // Append file content as context
+        // Append file content as context (XML tags avoid triple-backtick escaping issues)
         for (const att of fileAttachments) {
-            message += `\n\n---\nFile: ${att.name}\n\`\`\`\n${att.content}\n\`\`\``;
+            message += `\n\n<file path="${att.name}">\n${att.content}\n</file>`;
         }
 
         const conn = this.plugin.ensureConnection();
@@ -205,7 +205,13 @@ export class PiChatView extends ItemView {
             }));
         }
 
-        conn.send(command);
+        try {
+            conn.send(command);
+        } catch (err) {
+            console.error("[Pi Chat] Failed to send message:", err);
+            new Notice("Failed to send message to Pi");
+            this.setStreamingState(false);
+        }
     }
 
     /**
@@ -229,6 +235,10 @@ export class PiChatView extends ItemView {
             conn.send({ type: "abort" });
         } catch (err) {
             console.warn("[Pi Chat] Failed to send abort:", err);
+            new Notice("Connection lost — resetting view");
+        } finally {
+            // Always reset streaming state so user can recover
+            this.setStreamingState(false);
         }
     }
 
@@ -333,11 +343,22 @@ export class PiChatView extends ItemView {
 
             // Add thinking content as a collapsed details element
             if (msg.thinkingContent) {
+                // Ensure we have a component for rendering (may not exist if no main content)
+                if (!this.streamingComponent) {
+                    this.streamingComponent = new Component();
+                    this.streamingComponent.load();
+                }
                 const thinkingEl = this.streamingMessageEl.createEl("details", { cls: "pi-thinking" });
                 thinkingEl.createEl("summary", { text: "Thinking..." });
                 const thinkingContent = thinkingEl.createDiv({ cls: "pi-thinking-content" });
                 try {
-                    MarkdownRenderer.render(this.app, msg.thinkingContent, thinkingContent, "", this);
+                    MarkdownRenderer.render(
+                        this.app,
+                        msg.thinkingContent,
+                        thinkingContent,
+                        "",
+                        this.streamingComponent,
+                    );
                 } catch (err) {
                     console.error("[Pi Chat] Thinking render error:", err);
                     thinkingContent.setText(msg.thinkingContent);

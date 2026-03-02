@@ -9,11 +9,14 @@
  * - Attachment chips display
  */
 
+import { Notice } from "obsidian";
+
 export interface Attachment {
     type: 'file' | 'image';
     name: string;
     content: string;       // text content for files, base64 for images
     mimeType?: string;     // e.g. 'image/png' for images
+    size?: number;         // file size in bytes (shown in attachment chip)
 }
 
 export interface ChatInputCallbacks {
@@ -150,9 +153,13 @@ export class ChatInput {
         }
 
         // Trigger slash command suggest when `/` typed as first char
-        if (e.key === "/" && this.textareaEl.value === "" && this.callbacks.onSlashTyped) {
-            // Let the character get typed first, then trigger
-            setTimeout(() => this.callbacks.onSlashTyped!(), 0);
+        if (e.key === "/" && this.callbacks.onSlashTyped) {
+            // Check after the character is inserted (keydown fires before insertion)
+            setTimeout(() => {
+                if (this.textareaEl.value.startsWith("/")) {
+                    this.callbacks.onSlashTyped!();
+                }
+            }, 0);
         }
 
         // Trigger @ file picker when `@` typed
@@ -194,17 +201,34 @@ export class ChatInput {
                 const mimeType = item.type;
                 const reader = new FileReader();
                 reader.onload = () => {
-                    const dataUrl = reader.result as string;
-                    // Strip the data:image/xxx;base64, prefix to get raw base64
-                    const base64 = dataUrl.split(",")[1];
-                    if (base64) {
-                        this.addAttachment({
-                            type: "image",
-                            name: `pasted-image-${Date.now()}.${mimeType.split("/")[1] || "png"}`,
-                            content: base64,
-                            mimeType,
-                        });
+                    const result = reader.result;
+                    if (typeof result !== "string") {
+                        console.error("[ChatInput] Failed to read image as data URL");
+                        return;
                     }
+                    // Strip the data:image/xxx;base64, prefix to get raw base64
+                    const parts = result.split(",");
+                    if (parts.length < 2) {
+                        console.error("[ChatInput] Invalid data URL format");
+                        return;
+                    }
+                    const base64 = parts[1];
+                    // Reject images over 5MB (base64 is ~1.33x original)
+                    const sizeBytes = (base64.length * 3) / 4;
+                    if (sizeBytes > 5 * 1024 * 1024) {
+                        new Notice(`Image too large (${(sizeBytes / (1024 * 1024)).toFixed(1)}MB). Max 5MB.`);
+                        return;
+                    }
+                    this.addAttachment({
+                        type: "image",
+                        name: `pasted-image-${Date.now()}.${mimeType.split("/")[1] || "png"}`,
+                        content: base64,
+                        mimeType,
+                        size: sizeBytes,
+                    });
+                };
+                reader.onerror = () => {
+                    console.error("[ChatInput] FileReader error:", reader.error);
                 };
                 reader.readAsDataURL(file);
                 break; // Only handle first image
@@ -239,7 +263,18 @@ export class ChatInput {
                 thumb.style.borderRadius = "2px";
             }
 
-            chip.createSpan({ text: att.name, cls: "pi-attachment-name" });
+            chip.createSpan({
+                text: att.name,
+                cls: "pi-attachment-name",
+                attr: { title: att.name },
+            });
+            if (att.size != null) {
+                const sizeKB = att.size / 1024;
+                const sizeText = sizeKB >= 1024
+                    ? `${(sizeKB / 1024).toFixed(1)} MB`
+                    : `${sizeKB.toFixed(1)} KB`;
+                chip.createSpan({ text: ` (${sizeText})`, cls: "pi-attachment-size" });
+            }
 
             const removeBtn = chip.createSpan({
                 text: "×",
