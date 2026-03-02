@@ -1,7 +1,8 @@
-import { Notice, Plugin } from "obsidian";
+import { Notice, Plugin, WorkspaceLeaf } from "obsidian";
 import { PiConnection } from "./rpc";
 import { DEFAULT_SETTINGS, PiSettingTab } from "./settings";
 import type { PiPluginSettings } from "./settings";
+import { PiChatView, VIEW_TYPE_PI_CHAT } from "./view";
 
 export default class PiPlugin extends Plugin {
     settings: PiPluginSettings = DEFAULT_SETTINGS;
@@ -11,6 +12,24 @@ export default class PiPlugin extends Plugin {
         await this.loadSettings();
 
         this.addSettingTab(new PiSettingTab(this.app, this));
+
+        // Register the chat view
+        this.registerView(
+            VIEW_TYPE_PI_CHAT,
+            (leaf: WorkspaceLeaf) => new PiChatView(leaf, this),
+        );
+
+        // Ribbon icon to open chat
+        this.addRibbonIcon("message-circle", "Open Pi Chat", () => {
+            this.activateView();
+        });
+
+        // Command: open chat view
+        this.addCommand({
+            id: "pi-open-chat",
+            name: "Open chat",
+            callback: () => this.activateView(),
+        });
 
         this.addCommand({
             id: "pi-send-prompt",
@@ -27,6 +46,47 @@ export default class PiPlugin extends Plugin {
             this.connection = null;
         }
         console.log("[Pi Plugin] Unloaded");
+    }
+
+    /**
+     * Find or create the Pi Chat view in the right sidebar and reveal it.
+     */
+    async activateView(): Promise<PiChatView> {
+        const { workspace } = this.app;
+
+        let leaf: WorkspaceLeaf | null = null;
+        const leaves = workspace.getLeavesOfType(VIEW_TYPE_PI_CHAT);
+
+        if (leaves.length > 0) {
+            // View already exists — reveal it
+            leaf = leaves[0];
+        } else {
+            // Create a new leaf in the right sidebar
+            leaf = workspace.getRightLeaf(false);
+            if (leaf) {
+                await leaf.setViewState({
+                    type: VIEW_TYPE_PI_CHAT,
+                    active: true,
+                });
+            }
+        }
+
+        if (leaf) {
+            workspace.revealLeaf(leaf);
+        }
+
+        return this.getActiveView()!;
+    }
+
+    /**
+     * Get the currently active PiChatView, if any.
+     */
+    getActiveView(): PiChatView | null {
+        const leaves = this.app.workspace.getLeavesOfType(VIEW_TYPE_PI_CHAT);
+        if (leaves.length === 0) return null;
+        const view = leaves[0].view;
+        if (view instanceof PiChatView) return view;
+        return null;
     }
 
     async loadSettings(): Promise<void> {

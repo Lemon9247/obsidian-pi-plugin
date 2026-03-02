@@ -1,1 +1,132 @@
-/* Pi Plugin styles */
+/* Pi Plugin — Chat View Styles */
+
+/* ── Layout ── */
+.pi-chat-container {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+}
+
+.pi-messages {
+    flex: 1;
+    overflow-y: auto;
+    padding: 12px;
+}
+
+.pi-input-container {
+    border-top: 1px solid var(--background-modifier-border);
+    padding: 8px 12px;
+    min-height: 40px;
+}
+
+.pi-input-placeholder {
+    color: var(--text-muted);
+    font-size: 0.85em;
+    font-style: italic;
+}
+
+/* ── Messages ── */
+.pi-message {
+    margin-bottom: 16px;
+}
+
+.pi-message-label {
+    margin-bottom: 4px;
+}
+
+.pi-message-label-text {
+    font-size: 0.8em;
+    font-weight: 600;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+}
+
+/* ── User messages ── */
+.pi-message-user .pi-message-content {
+    background: var(--background-modifier-form-field);
+    border-radius: 8px;
+    padding: 8px 12px;
+}
+
+.pi-message-user .pi-message-content p {
+    margin: 0;
+}
+
+/* ── Assistant messages ── */
+.pi-message-assistant .pi-message-content {
+    padding: 4px 0;
+}
+
+/* Tighten markdown spacing inside assistant messages */
+.pi-message-assistant .pi-message-content > *:first-child {
+    margin-top: 0;
+}
+
+.pi-message-assistant .pi-message-content > *:last-child {
+    margin-bottom: 0;
+}
+
+/* ── Tool call messages ── */
+.pi-message-tool details {
+    border: 1px solid var(--background-modifier-border);
+    border-radius: 4px;
+    padding: 4px 8px;
+}
+
+.pi-message-tool summary {
+    cursor: pointer;
+    font-family: var(--font-monospace);
+    font-size: 0.85em;
+    padding: 4px 0;
+    user-select: none;
+}
+
+.pi-message-tool summary:hover {
+    color: var(--text-accent);
+}
+
+.pi-tool-name {
+    color: var(--text-normal);
+}
+
+.pi-tool-error-indicator {
+    color: var(--text-error);
+    margin-left: 4px;
+}
+
+.pi-message-tool-error details {
+    border-color: var(--text-error);
+}
+
+.pi-tool-body {
+    padding: 8px 0 4px;
+}
+
+.pi-tool-section-label {
+    font-size: 0.75em;
+    font-weight: 600;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    margin-bottom: 4px;
+}
+
+.pi-tool-args pre,
+.pi-tool-result pre {
+    font-size: 0.85em;
+    margin: 0;
+    padding: 6px 8px;
+    background: var(--background-primary-alt);
+    border-radius: 4px;
+    overflow-x: auto;
+}
+
+.pi-tool-result {
+    margin-top: 8px;
+}
+
+.pi-tool-result-content {
+    max-height: 300px;
+    overflow-y: auto;
+}
