@@ -91,6 +91,13 @@ export class PiChatView extends ItemView {
 
         this.chatInput.focus();
 
+        // Track whether user has scrolled away from bottom
+        this.messagesContainer.addEventListener("scroll", () => {
+            const el = this.messagesContainer;
+            const distFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+            this.userScrolledUp = distFromBottom > 100;
+        });
+
         // Wire up RPC event stream so responses are rendered
         this.connectToRpc();
     }
@@ -153,16 +160,15 @@ export class PiChatView extends ItemView {
         return this.messagesContainer;
     }
 
+    /** Whether the user has manually scrolled away from the bottom */
+    private userScrolledUp = false;
+
     /**
-     * Scroll the messages container to the bottom, but only if user is already near the bottom.
-     * This prevents forcibly scrolling the user away from content they're reading.
+     * Scroll the messages container to the bottom unless the user has scrolled up.
      */
     scrollToBottom(): void {
-        const el = this.messagesContainer;
-        const isAtBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 50;
-        if (isAtBottom) {
-            el.scrollTop = el.scrollHeight;
-        }
+        if (this.userScrolledUp) return;
+        this.messagesContainer.scrollTop = this.messagesContainer.scrollHeight;
     }
 
     /**
@@ -182,6 +188,9 @@ export class PiChatView extends ItemView {
             new Notice("This is a saved session (read-only). Start a new session to chat.");
             return;
         }
+
+        // User sent a message — follow the response
+        this.userScrolledUp = false;
 
         // Build the display text (include attachment names)
         let displayText = text;
