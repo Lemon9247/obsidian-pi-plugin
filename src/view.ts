@@ -38,6 +38,12 @@ export class PiChatView extends ItemView {
     /** Component for the final markdown render after streaming completes */
     private streamingComponent: Component | null = null;
 
+    /** Debounce timer for live markdown re-rendering during streaming */
+    private streamRenderTimer: ReturnType<typeof setTimeout> | null = null;
+
+    /** Latest streamed content waiting to be rendered */
+    private pendingStreamContent: string | null = null;
+
     constructor(leaf: WorkspaceLeaf, plugin: PiPlugin) {
         super(leaf);
         this.plugin = plugin;
@@ -116,6 +122,11 @@ export class PiChatView extends ItemView {
 
         // Clean up streaming state
         this.streamHandler.reset();
+        if (this.streamRenderTimer) {
+            clearTimeout(this.streamRenderTimer);
+            this.streamRenderTimer = null;
+        }
+        this.pendingStreamContent = null;
 
         // Unload any active streaming component
         if (this.streamingComponent) {
@@ -453,12 +464,11 @@ export class PiChatView extends ItemView {
     }
 
     /**
-     * Handle streaming text update — use plaintext during streaming for performance.
-     * Full markdown rendering happens on completion in handleStreamComplete().
+     * Handle streaming text update — debounced live markdown rendering.
      */
     private handleStreamUpdate(msg: ChatMessage): void {
         if (!this.streamingMessageEl) {
-            // First delta — create the assistant message container with plaintext
+            // First delta — create the assistant message container
             this.streamingMessageEl = this.messagesContainer.createDiv({
                 cls: "pi-message pi-message-assistant",
             });
@@ -471,14 +481,21 @@ export class PiChatView extends ItemView {
         if (!contentEl) return;
 
         if (msg.content) {
-            // Text is streaming — show it
-            // Collapse the live thinking block now that the response is arriving
+            // Text is streaming — collapse live thinking block
             const liveThinking = this.streamingMessageEl.querySelector(".pi-thinking-live");
             if (liveThinking) {
                 (liveThinking as HTMLDetailsElement).open = false;
                 liveThinking.removeClass("pi-thinking-live");
             }
-            (contentEl as HTMLElement).setText(msg.content);
+
+            // Schedule debounced markdown re-render
+            this.pendingStreamContent = msg.content;
+            if (!this.streamRenderTimer) {
+                this.streamRenderTimer = setTimeout(() => {
+                    this.streamRenderTimer = null;
+                    this.renderStreamingMarkdown();
+                }, 100);
+            }
         } else if (msg.thinkingContent) {
             // Thinking in progress — show expandable live thinking block
             let thinkingEl = this.streamingMessageEl.querySelector(".pi-thinking-live") as HTMLDetailsElement | null;
@@ -499,6 +516,40 @@ export class PiChatView extends ItemView {
     }
 
     /**
+     * Render the latest streamed content as markdown.
+     * Called on a debounce timer to avoid thrashing on every delta.
+     */
+    private renderStreamingMarkdown(): void {
+        if (!this.streamingMessageEl || !this.pendingStreamContent) return;
+
+        const contentEl = this.streamingMessageEl.querySelector(".pi-message-content");
+        if (!contentEl) return;
+
+        // Reuse or create a component for streaming renders
+        if (this.streamingComponent) {
+            this.streamingComponent.unload();
+        }
+        this.streamingComponent = new Component();
+        this.streamingComponent.load();
+
+        contentEl.empty();
+        try {
+            MarkdownRenderer.render(
+                this.app,
+                this.pendingStreamContent,
+                contentEl as HTMLElement,
+                "",
+                this.streamingComponent,
+            );
+        } catch (err) {
+            console.error("[Pi Chat] Streaming markdown render error:", err);
+            (contentEl as HTMLElement).setText(this.pendingStreamContent);
+        }
+
+        this.scrollToBottom();
+    }
+
+    /**
      * Handle stream completion — do full markdown render and finalize the message.
      */
     private handleStreamComplete(msg: ChatMessage): void {
@@ -507,6 +558,13 @@ export class PiChatView extends ItemView {
         if (this.chatInput) {
             this.chatInput.focus();
         }
+
+        // Cancel any pending debounced render
+        if (this.streamRenderTimer) {
+            clearTimeout(this.streamRenderTimer);
+            this.streamRenderTimer = null;
+        }
+        this.pendingStreamContent = null;
 
         // If we were streaming, do a final markdown render
         if (this.streamingMessageEl) {
