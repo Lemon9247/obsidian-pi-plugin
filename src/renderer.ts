@@ -20,10 +20,24 @@ export class MessageRenderer {
         markdown: string,
         sourcePath: string,
         component: Component,
+        thinkingContent?: string,
     ): HTMLElement {
         const wrapper = container.createDiv({ cls: "pi-message pi-message-assistant" });
         const label = wrapper.createDiv({ cls: "pi-message-label" });
         label.createSpan({ text: "Pi", cls: "pi-message-label-text" });
+
+        // Thinking block (collapsed) goes before the response text
+        if (thinkingContent) {
+            const thinkingEl = wrapper.createEl("details", { cls: "pi-thinking" });
+            thinkingEl.createEl("summary", { text: "Thinking…" });
+            const thinkingContentEl = thinkingEl.createDiv({ cls: "pi-thinking-content" });
+            try {
+                MarkdownRenderer.render(this.app, thinkingContent, thinkingContentEl, sourcePath, component);
+            } catch (err) {
+                console.error("[Pi Chat] Thinking render error:", err);
+                thinkingContentEl.setText(thinkingContent);
+            }
+        }
 
         const contentEl = wrapper.createDiv({ cls: "pi-message-content" });
 

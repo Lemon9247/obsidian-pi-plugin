@@ -445,11 +445,23 @@ export class PiChatView extends ItemView {
             this.streamingMessageEl.createDiv({ cls: "pi-message-content" });
         }
 
-        // Update plaintext content — no markdown parsing during streaming
         const contentEl = this.streamingMessageEl.querySelector(".pi-message-content");
-        if (contentEl) {
+        if (!contentEl) return;
+
+        if (msg.content) {
+            // Text is streaming — show it and remove thinking indicator
+            const indicator = this.streamingMessageEl.querySelector(".pi-thinking-indicator");
+            if (indicator) indicator.remove();
             (contentEl as HTMLElement).setText(msg.content);
+        } else if (msg.thinkingContent) {
+            // Thinking in progress, no text yet — show live indicator
+            if (!this.streamingMessageEl.querySelector(".pi-thinking-indicator")) {
+                const indicator = createDiv({ cls: "pi-thinking-indicator" });
+                indicator.setText("Thinking…");
+                this.streamingMessageEl.insertBefore(indicator, contentEl);
+            }
         }
+
         this.scrollToBottom();
     }
 
@@ -492,28 +504,34 @@ export class PiChatView extends ItemView {
                 }
             }
 
-            // Add thinking content as a collapsed details element
+            // Remove live thinking indicator
+            const indicator = this.streamingMessageEl.querySelector(".pi-thinking-indicator");
+            if (indicator) indicator.remove();
+
+            // Add thinking content as a collapsed details element BEFORE the response text
             if (msg.thinkingContent) {
                 // Ensure we have a component for rendering (may not exist if no main content)
                 if (!this.streamingComponent) {
                     this.streamingComponent = new Component();
                     this.streamingComponent.load();
                 }
-                const thinkingEl = this.streamingMessageEl.createEl("details", { cls: "pi-thinking" });
-                thinkingEl.createEl("summary", { text: "Thinking..." });
-                const thinkingContent = thinkingEl.createDiv({ cls: "pi-thinking-content" });
+                const thinkingEl = createEl("details", { cls: "pi-thinking" });
+                thinkingEl.createEl("summary", { text: "Thinking…" });
+                const thinkingContentEl = thinkingEl.createDiv({ cls: "pi-thinking-content" });
                 try {
                     MarkdownRenderer.render(
                         this.app,
                         msg.thinkingContent,
-                        thinkingContent,
+                        thinkingContentEl,
                         "",
                         this.streamingComponent,
                     );
                 } catch (err) {
                     console.error("[Pi Chat] Thinking render error:", err);
-                    thinkingContent.setText(msg.thinkingContent);
+                    thinkingContentEl.setText(msg.thinkingContent);
                 }
+                // Insert before the content div so thinking appears above the response
+                this.streamingMessageEl.insertBefore(thinkingEl, contentEl);
             }
 
             this.streamingMessageEl = null;
@@ -536,6 +554,7 @@ export class PiChatView extends ItemView {
                         msg.content,
                         "",
                         this,
+                        msg.thinkingContent,
                     );
                     break;
                 case "tool":

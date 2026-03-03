@@ -221,6 +221,38 @@
     flex-shrink: 0;
 }
 
+/* ── Thinking ── */
+.pi-thinking-indicator {
+    color: var(--text-muted);
+    font-size: 0.85em;
+    font-style: italic;
+    padding: 4px 0;
+    animation: pi-pulse 1.5s ease-in-out infinite;
+}
+
+@keyframes pi-pulse {
+    0%, 100% { opacity: 0.4; }
+    50% { opacity: 1; }
+}
+
+.pi-thinking {
+    margin-bottom: 8px;
+    font-size: 0.85em;
+    color: var(--text-muted);
+}
+
+.pi-thinking summary {
+    cursor: pointer;
+    user-select: none;
+    font-style: italic;
+}
+
+.pi-thinking-content {
+    padding: 4px 0 4px 12px;
+    border-left: 2px solid var(--background-modifier-border);
+    margin-top: 4px;
+}
+
 /* ── Status bar ── */
 .pi-status-bar {
     padding: 0 8px;
