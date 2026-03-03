@@ -132,7 +132,7 @@ export default class PiPlugin extends Plugin {
     }
 
     /**
-     * Find or create the Pi Chat view in the right sidebar and reveal it.
+     * Find or create the Pi Chat view as a tab in the main editor area.
      */
     async activateView(): Promise<PiChatView> {
         const { workspace } = this.app;
@@ -144,14 +144,12 @@ export default class PiPlugin extends Plugin {
             // View already exists — reveal it
             leaf = leaves[0];
         } else {
-            // Create a new leaf in the right sidebar
-            leaf = workspace.getRightLeaf(false);
-            if (leaf) {
-                await leaf.setViewState({
-                    type: VIEW_TYPE_PI_CHAT,
-                    active: true,
-                });
-            }
+            // Open as a new tab in the main editor area
+            leaf = workspace.getLeaf('tab');
+            await leaf.setViewState({
+                type: VIEW_TYPE_PI_CHAT,
+                active: true,
+            });
         }
 
         if (leaf) {
