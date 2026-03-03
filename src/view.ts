@@ -494,7 +494,7 @@ export class PiChatView extends ItemView {
         const conn = this.plugin.connection;
         if (conn?.isConnected()) {
             try {
-                await conn.send({ type: "switch_session", sessionFile: session.path });
+                await conn.send({ type: "switch_session", sessionPath: session.path });
             } catch (err) {
                 console.warn("[Pi Chat] switch_session RPC failed:", err);
                 new Notice("Failed to switch session");
@@ -543,7 +543,7 @@ export class PiChatView extends ItemView {
 
     /**
      * Export a Pi session to the vault as a markdown note.
-     * This is a best-effort export — reads the .jsonl and converts to our markdown format.
+     * Reads Pi's .jsonl format (typed entries with { type: "message", message: {...} } wrappers).
      */
     private async exportSession(session: PiSession): Promise<void> {
         try {
@@ -555,32 +555,37 @@ export class PiChatView extends ItemView {
             for (const line of lines) {
                 try {
                     const entry = JSON.parse(line);
-                    if (entry.role === "user") {
-                        const text = typeof entry.content === "string"
-                            ? entry.content
-                            : Array.isArray(entry.content)
-                                ? entry.content.filter((b: any) => b.type === "text").map((b: any) => b.text).join("\n")
-                                : "";
-                        if (text) {
+                    // Pi wraps messages in { type: "message", message: { role, content, ... } }
+                    if (entry.type !== "message" || !entry.message) continue;
+
+                    const msg = entry.message;
+                    const text = this.extractMessageText(msg.content);
+
+                    if (msg.role === "user" && text) {
+                        messages.push({
+                            id: generateMessageId(),
+                            role: "user",
+                            content: text,
+                            timestamp: msg.timestamp || Date.now(),
+                        });
+                    } else if (msg.role === "assistant" && text) {
+                        messages.push({
+                            id: generateMessageId(),
+                            role: "assistant",
+                            content: text,
+                            timestamp: msg.timestamp || Date.now(),
+                        });
+                    } else if (msg.role === "toolResult") {
+                        const resultText = this.extractMessageText(msg.content);
+                        if (resultText) {
                             messages.push({
                                 id: generateMessageId(),
-                                role: "user",
-                                content: text,
-                                timestamp: Date.now(),
-                            });
-                        }
-                    } else if (entry.role === "assistant") {
-                        const text = typeof entry.content === "string"
-                            ? entry.content
-                            : Array.isArray(entry.content)
-                                ? entry.content.filter((b: any) => b.type === "text").map((b: any) => b.text).join("\n")
-                                : "";
-                        if (text) {
-                            messages.push({
-                                id: generateMessageId(),
-                                role: "assistant",
-                                content: text,
-                                timestamp: Date.now(),
+                                role: "tool",
+                                content: resultText,
+                                toolName: msg.toolName || "tool",
+                                toolCallId: msg.toolCallId,
+                                isError: msg.isError || undefined,
+                                timestamp: msg.timestamp || Date.now(),
                             });
                         }
                     }
@@ -608,6 +613,21 @@ export class PiChatView extends ItemView {
             console.error("[Pi Chat] Export failed:", err);
             new Notice("Failed to export session");
         }
+    }
+
+    /**
+     * Extract plain text from a Pi message content field.
+     * Content can be a string or an array of content blocks.
+     */
+    private extractMessageText(content: unknown): string {
+        if (typeof content === "string") return content;
+        if (Array.isArray(content)) {
+            return content
+                .filter((b: any) => b.type === "text" && b.text)
+                .map((b: any) => b.text)
+                .join("\n");
+        }
+        return "";
     }
 
     /**

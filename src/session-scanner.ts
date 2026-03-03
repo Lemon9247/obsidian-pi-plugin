@@ -1,27 +1,33 @@
 /**
  * Scans Pi's native session directory (~/.pi/agent/sessions/) for session metadata.
  *
- * Pi stores sessions as .jsonl files. We read the first and last lines to extract
- * metadata (name, date, cwd, message count) without loading the full file.
+ * Pi stores sessions as .jsonl files. Each line is a typed entry:
+ *   - { type: "session", id, cwd, timestamp }       — session metadata (first line)
+ *   - { type: "model_change", provider, modelId }    — model switch
+ *   - { type: "message", message: { role, content }} — user/assistant/toolResult message
+ *   - { type: "session_name", name }                 — display name
  *
  * Session directory structure:
- *   ~/.pi/agent/sessions/<cwd-slug>/<session-name>.jsonl
+ *   ~/.pi/agent/sessions/--<slug>--/<timestamp>_<uuid>.jsonl
+ *
+ * Slugs use -- as boundary delimiters and - within path components:
+ *   /home/user/Projects → --home-user-Projects--
  */
 
 import { readFile, readdir, stat } from "fs/promises";
-import { join, basename, dirname } from "path";
+import { join, basename } from "path";
 import { homedir } from "os";
 
 export interface PiSession {
     /** Full path to the .jsonl file */
     path: string;
-    /** Session display name (from metadata or filename) */
+    /** Session display name (from session_name entry or filename) */
     name: string;
     /** Working directory this session was started in */
     cwd: string;
     /** Last modified time (ms since epoch) */
     mtime: number;
-    /** Approximate message count (line count / 2 as rough heuristic) */
+    /** Approximate message count */
     messageCount: number;
     /** First user message as preview text */
     preview: string;
@@ -84,45 +90,53 @@ export class SessionScanner {
 
     /**
      * Read metadata from a single .jsonl session file.
-     * Only reads first and last lines to avoid loading the full file.
      */
     private async readSessionMetadata(filePath: string, cwdSlug: string): Promise<PiSession | null> {
         const fileStat = await stat(filePath);
         if (fileStat.size === 0) return null;
 
-        // Read the full file — for most sessions this is fine.
-        // For very large sessions (>1MB), we could optimize with streams,
-        // but that's premature for now.
         const content = await readFile(filePath, "utf-8");
         const lines = content.split("\n").filter((l) => l.trim());
 
         if (lines.length === 0) return null;
 
-        // Try to parse first line for session metadata
         let name = basename(filePath, ".jsonl");
         let preview = "";
         let cwd = this.unslugCwd(cwdSlug);
+        let messageCount = 0;
+        let sessionName = "";
 
-        // Look for the session name in metadata or first user message
-        for (const line of lines.slice(0, 10)) {
+        for (const line of lines) {
             try {
                 const entry = JSON.parse(line);
-                // Check for session metadata entry
-                if (entry.sessionName) {
-                    name = entry.sessionName;
+
+                // Session header — first line
+                if (entry.type === "session") {
+                    if (entry.cwd) cwd = entry.cwd;
+                    if (entry.id) name = entry.id;
+                    continue;
                 }
-                if (entry.cwd) {
-                    cwd = entry.cwd;
+
+                // Session name set by user
+                if (entry.type === "session_name" && entry.name) {
+                    sessionName = entry.name;
+                    continue;
                 }
-                // Find first user message for preview
-                if (!preview && entry.role === "user" && entry.content) {
-                    const text = typeof entry.content === "string"
-                        ? entry.content
-                        : Array.isArray(entry.content)
-                            ? entry.content.filter((b: any) => b.type === "text").map((b: any) => b.text).join(" ")
-                            : "";
-                    if (text) {
-                        preview = text.length > 80 ? text.slice(0, 80) + "…" : text;
+
+                // Message entry — count and extract preview
+                if (entry.type === "message" && entry.message) {
+                    const msg = entry.message;
+
+                    if (msg.role === "user" || msg.role === "assistant") {
+                        messageCount++;
+                    }
+
+                    // First user message as preview
+                    if (!preview && msg.role === "user") {
+                        preview = this.extractText(msg.content);
+                        if (preview.length > 80) {
+                            preview = preview.slice(0, 80) + "…";
+                        }
                     }
                 }
             } catch {
@@ -130,9 +144,16 @@ export class SessionScanner {
             }
         }
 
-        // Estimate message count: each user+assistant pair is roughly 2 lines
-        // but there are also tool calls, metadata, etc.
-        const messageCount = Math.max(1, Math.floor(lines.length / 2));
+        // Use session name if set, otherwise derive from timestamp in filename
+        if (sessionName) {
+            name = sessionName;
+        } else {
+            // Filename format: 2026-03-03T10-44-51-584Z_uuid.jsonl
+            const dateMatch = basename(filePath).match(/^(\d{4}-\d{2}-\d{2})T(\d{2})-(\d{2})/);
+            if (dateMatch) {
+                name = `${dateMatch[1]} ${dateMatch[2]}:${dateMatch[3]}`;
+            }
+        }
 
         return {
             path: filePath,
@@ -145,16 +166,33 @@ export class SessionScanner {
     }
 
     /**
+     * Extract plain text from a message content field.
+     * Content can be a string or an array of content blocks.
+     */
+    private extractText(content: unknown): string {
+        if (typeof content === "string") return content;
+        if (Array.isArray(content)) {
+            return content
+                .filter((b: any) => b.type === "text" && b.text)
+                .map((b: any) => b.text)
+                .join(" ");
+        }
+        return "";
+    }
+
+    /**
      * Convert a cwd slug back to a readable path.
-     * Pi slugs directories by replacing / with - and other transformations.
-     * We just display the slug directly — it's readable enough.
+     * Pi slugs: --home-user-Projects-- → /home/user/Projects
      */
     private unslugCwd(slug: string): string {
-        // Common pattern: home-username-Projects-... → ~/Projects/...
-        const home = basename(homedir());
-        if (slug.startsWith(`home-${home}-`)) {
-            return "~/" + slug.slice(`home-${home}-`.length).replace(/-/g, "/");
-        }
-        return slug.replace(/-/g, "/");
+        // Strip leading/trailing --
+        let inner = slug;
+        if (inner.startsWith("--")) inner = inner.slice(2);
+        if (inner.endsWith("--")) inner = inner.slice(0, -2);
+
+        // Replace - with /
+        const path = "/" + inner.replace(/-/g, "/");
+
+        return path;
     }
 }
