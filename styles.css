@@ -178,7 +178,7 @@
 .pi-abort-btn {
     padding: 4px 12px;
     border-radius: 4px;
-    background: var(--background-modifier-error);
+    background: var(--color-red);
     color: var(--text-on-accent);
     border: none;
     cursor: pointer;
@@ -188,7 +188,8 @@
 }
 
 .pi-abort-btn:hover {
-    opacity: 0.9;
+    background: var(--color-red);
+    filter: brightness(0.85);
 }
 
 /* ── Attachment chips ── */
