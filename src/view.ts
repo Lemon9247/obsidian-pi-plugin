@@ -532,11 +532,19 @@ export class PiChatView extends ItemView {
         this.streamingComponent = new Component();
         this.streamingComponent.load();
 
+        // Neutralize mermaid/dataview/etc. fences during streaming —
+        // they break when re-rendered on partial content.
+        // The final render in handleStreamComplete uses the real content.
+        const safeContent = this.pendingStreamContent.replace(
+            /```(mermaid|dataview|dataviewjs|query)/g,
+            "```$1-preview",
+        );
+
         contentEl.empty();
         try {
             MarkdownRenderer.render(
                 this.app,
-                this.pendingStreamContent,
+                safeContent,
                 contentEl as HTMLElement,
                 "",
                 this.streamingComponent,
