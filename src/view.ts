@@ -239,7 +239,8 @@ export class PiChatView extends ItemView {
     }
 
     /**
-     * Restore the last active session's messages from the message store.
+     * Restore the current session's messages on startup.
+     * Tries the local store first (fast), falls back to get_messages RPC.
      */
     private async restoreSession(): Promise<void> {
         const conn = this.plugin.connection;
@@ -254,11 +255,15 @@ export class PiChatView extends ItemView {
                 this.plugin.messageStore.setLastSession(sessionFile);
                 this.plugin.scheduleStoreFlush();
 
-                // If we have no messages displayed, try loading from store
+                // If we have no messages displayed, load them
                 if (this.messages.length === 0) {
+                    // Try local store first (instant)
                     const stored = this.plugin.messageStore.getMessages(sessionFile);
                     if (stored.length > 0) {
                         this.displayMessages(stored, false);
+                    } else {
+                        // Fall back to loading from Pi
+                        await this.loadMessagesFromPi();
                     }
                 }
             }
@@ -416,6 +421,103 @@ export class PiChatView extends ItemView {
     }
 
     /**
+     * Load messages from Pi's session via get_messages RPC and display them.
+     */
+    private async loadMessagesFromPi(): Promise<void> {
+        const conn = this.plugin.connection;
+        if (!conn?.isConnected()) return;
+
+        try {
+            const response = await conn.send({ type: "get_messages" });
+            const data = response.data as Record<string, unknown> | undefined;
+            const rawMessages = data?.messages as Array<Record<string, unknown>> | undefined;
+            if (!Array.isArray(rawMessages) || rawMessages.length === 0) return;
+
+            const chatMessages: ChatMessage[] = [];
+            for (const raw of rawMessages) {
+                const msg = this.convertAgentMessage(raw);
+                if (msg) chatMessages.push(msg);
+            }
+
+            if (chatMessages.length > 0) {
+                for (const msg of chatMessages) {
+                    this.messages.push(msg);
+                    this.renderMessage(msg);
+                }
+                this.scrollToBottom();
+
+                // Cache in store for fast reload next time
+                if (this.currentSessionPath) {
+                    this.plugin.messageStore.setMessages(this.currentSessionPath, this.messages);
+                    this.plugin.scheduleStoreFlush();
+                }
+            }
+        } catch (err) {
+            console.warn("[Pi Chat] get_messages failed:", err);
+        }
+    }
+
+    /**
+     * Convert a Pi AgentMessage to our ChatMessage format.
+     * AgentMessages have: { role: "user"|"assistant"|"toolResult", content, ... }
+     */
+    private convertAgentMessage(raw: Record<string, unknown>): ChatMessage | null {
+        const role = raw.role as string;
+        const timestamp = (raw.timestamp as number) || Date.now();
+
+        if (role === "user") {
+            const text = this.extractMessageText(raw.content);
+            if (!text) return null;
+            return {
+                id: generateMessageId(),
+                role: "user",
+                content: text,
+                timestamp,
+            };
+        }
+
+        if (role === "assistant") {
+            const content = raw.content;
+            if (!Array.isArray(content)) return null;
+
+            const text = content
+                .filter((b: any) => b.type === "text" && b.text)
+                .map((b: any) => b.text)
+                .join("\n");
+
+            const thinking = content
+                .filter((b: any) => b.type === "thinking" && b.thinking)
+                .map((b: any) => b.thinking)
+                .join("\n\n");
+
+            if (!text && !thinking) return null;
+
+            return {
+                id: generateMessageId(),
+                role: "assistant",
+                content: text,
+                timestamp,
+                thinkingContent: thinking || undefined,
+            };
+        }
+
+        if (role === "toolResult") {
+            const text = this.extractMessageText(raw.content);
+            return {
+                id: generateMessageId(),
+                role: "tool",
+                content: text,
+                timestamp,
+                toolName: (raw.toolName as string) || "tool",
+                toolCallId: (raw.toolCallId as string) || undefined,
+                isError: (raw.isError as boolean) || undefined,
+            };
+        }
+
+        return null;
+    }
+
+    /**
      * Public API for starting a new session (used by command palette).
      */
     startNewSession(): void {
@@ -449,23 +551,43 @@ export class PiChatView extends ItemView {
         const conn = this.plugin.connection;
         if (conn?.isConnected()) {
             try {
-                await conn.send({ type: "new_session" });
+                const response = await conn.send({ type: "new_session" });
+                const data = response.data as Record<string, unknown> | undefined;
+                if (data?.cancelled) {
+                    new Notice("New session was cancelled by an extension");
+                    return;
+                }
             } catch (err) {
-                console.warn("[Pi Chat] new_session RPC failed:", err);
+                const msg = err instanceof Error ? err.message : String(err);
+                console.error("[Pi Chat] new_session RPC failed:", err);
+                new Notice(`Failed to create new session: ${msg}`);
+                return;
             }
+        }
+
+        // Get the new session's path from Pi
+        try {
+            const conn = this.plugin.connection;
+            if (conn?.isConnected()) {
+                const state = await conn.send({ type: "get_state" });
+                const data = state.data as Record<string, unknown> | undefined;
+                const sessionFile = data?.sessionFile as string | undefined;
+                if (sessionFile) {
+                    this.currentSessionPath = sessionFile;
+                    this.plugin.messageStore.setLastSession(sessionFile);
+                    this.plugin.scheduleStoreFlush();
+                }
+            }
+        } catch {
+            // Non-fatal
         }
 
         // Reset header
         if (this.headerSessionName) this.headerSessionName.setText("New Session");
-        this.sessionPanel?.setCurrentSession(null);
+        this.sessionPanel?.setCurrentSession(this.currentSessionPath);
         this.plugin.statusBar?.refreshModel();
+        this.refreshHeader();
         new Notice("New session started");
-
-        // Refresh after short delay for Pi to initialize — picks up new session path
-        setTimeout(async () => {
-            await this.refreshHeader();
-            await this.restoreSession();
-        }, 500);
     }
 
     /**
@@ -492,14 +614,22 @@ export class PiChatView extends ItemView {
         this.clearMessages();
 
         const conn = this.plugin.connection;
-        if (conn?.isConnected()) {
-            try {
-                await conn.send({ type: "switch_session", sessionPath: session.path });
-            } catch (err) {
-                console.warn("[Pi Chat] switch_session RPC failed:", err);
-                new Notice("Failed to switch session");
+        if (!conn?.isConnected()) {
+            new Notice("Not connected to Pi");
+            return;
+        }
+
+        try {
+            const response = await conn.send({ type: "switch_session", sessionPath: session.path });
+            const data = response.data as Record<string, unknown> | undefined;
+            if (data?.cancelled) {
+                new Notice("Session switch was cancelled");
                 return;
             }
+        } catch (err) {
+            console.warn("[Pi Chat] switch_session RPC failed:", err);
+            new Notice("Failed to switch session");
+            return;
         }
 
         // Update session tracking
@@ -507,15 +637,8 @@ export class PiChatView extends ItemView {
         this.plugin.messageStore.setLastSession(session.path);
         this.plugin.scheduleStoreFlush();
 
-        // Reload messages from store
-        const stored = this.plugin.messageStore.getMessages(session.path);
-        if (stored.length > 0) {
-            for (const msg of stored) {
-                this.messages.push(msg);
-                this.renderMessage(msg);
-            }
-            this.scrollToBottom();
-        }
+        // Load messages from Pi (source of truth)
+        await this.loadMessagesFromPi();
 
         // Update header and panel state
         if (this.headerSessionName) {
@@ -529,9 +652,7 @@ export class PiChatView extends ItemView {
         this.plugin.statusBar?.refreshStats();
 
         new Notice(`Switched to: ${session.name}`);
-
-        // Refresh header after switch
-        setTimeout(() => this.refreshHeader(), 500);
+        this.refreshHeader();
     }
 
     /**

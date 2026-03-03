@@ -5,7 +5,7 @@ export type EventHandler = (event: Record<string, unknown>) => void;
 
 /**
  * Manages a connection to Pi's RPC interface.
- * Spawns `pi --mode rpc --no-session` and communicates via JSON lines over stdin/stdout.
+ * Spawns `pi --mode rpc` and communicates via JSON lines over stdin/stdout.
  */
 export class PiConnection {
     private piBinaryPath: string;
@@ -36,7 +36,7 @@ export class PiConnection {
             this.destroy();
         }
 
-        this.process = spawn(this.piBinaryPath, ["--mode", "rpc", "--no-session", ...this.extraArgs], {
+        this.process = spawn(this.piBinaryPath, ["--mode", "rpc", ...this.extraArgs], {
             cwd: this.cwd,
             stdio: ["pipe", "pipe", "pipe"],
             env: { ...process.env },
