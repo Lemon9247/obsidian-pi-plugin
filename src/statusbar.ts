@@ -9,6 +9,7 @@ export class PiStatusBar {
     private statusBarEl: HTMLElement;
     private model = "";
     private thinkingLevel = "";
+    private sessionName = "";
     private streaming = false;
     private tokens = 0;
     private cost = 0;
@@ -23,6 +24,11 @@ export class PiStatusBar {
     setModel(model: string, thinkingLevel: string): void {
         this.model = model;
         this.thinkingLevel = thinkingLevel;
+        this.render();
+    }
+
+    setSessionName(name: string): void {
+        this.sessionName = name;
         this.render();
     }
 
@@ -74,6 +80,27 @@ export class PiStatusBar {
                 const model = data.model as Record<string, unknown> | undefined;
                 this.model = (model?.name as string) ?? "";
                 this.thinkingLevel = (data.thinkingLevel as string) ?? "";
+                this.sessionName = (data.sessionName as string) ?? "";
+                this.render();
+            }
+        } catch {
+            // Non-fatal
+        }
+    }
+
+    /**
+     * Fetch session name alongside model info.
+     */
+    async refreshSessionName(): Promise<void> {
+        if (!this.plugin.connection?.isConnected()) return;
+
+        try {
+            const response = await this.plugin.connection.send({
+                type: "get_state",
+            });
+            const data = response.data as Record<string, unknown> | undefined;
+            if (data) {
+                this.sessionName = (data.sessionName as string) ?? "";
                 this.render();
             }
         } catch {
@@ -84,13 +111,17 @@ export class PiStatusBar {
     private render(): void {
         const parts: string[] = [];
 
+        if (this.sessionName) {
+            parts.push(this.sessionName);
+        }
+
         if (this.model) {
             let modelText = this.model;
             if (this.thinkingLevel && this.thinkingLevel !== "off") {
                 modelText += ` :${this.thinkingLevel}`;
             }
             parts.push(modelText);
-        } else {
+        } else if (!this.sessionName) {
             parts.push("Pi");
         }
 
