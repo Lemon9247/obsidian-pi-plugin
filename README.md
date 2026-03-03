@@ -60,17 +60,31 @@ Chat with the [Pi coding agent](https://github.com/nicholasgasior/pi-coding-agen
 
 The plugin communicates with Pi via its [RPC mode](https://github.com/nicholasgasior/pi-coding-agent/blob/main/docs/rpc.md) — spawns `pi --mode rpc --no-session` and exchanges JSON lines over stdin/stdout.
 
-```
-┌─────────────┐    JSON lines    ┌──────────┐
-│  Obsidian    │ ◄──────────────► │  Pi RPC  │
-│  Plugin      │   stdin/stdout   │  Process │
-│              │                  │          │
-│  ┌─────────┐ │                  │  Tools   │
-│  │ Chat UI │ │                  │  LLM API │
-│  │ Session │ │                  │  Sessions│
-│  │ Panel   │ │                  │          │
-│  └─────────┘ │                  └──────────┘
-└─────────────┘
+```mermaid
+graph LR
+    subgraph Obsidian
+        View[Chat View]
+        Header[Header Bar]
+        Panel[Session Panel]
+        Store[Message Store]
+        Commands[Command Palette]
+    end
+
+    subgraph Pi Process
+        RPC[RPC Server]
+        LLM[LLM API]
+        Tools[Tools]
+        Sessions[Session Files<br/>.jsonl]
+    end
+
+    View -- JSON lines<br/>stdin/stdout --> RPC
+    RPC -- streaming events --> View
+    Panel -- scan .jsonl --> Sessions
+    Store -. persist .-> View
+    Commands -- get_commands --> RPC
+    RPC --> LLM
+    RPC --> Tools
+    RPC --> Sessions
 ```
 
 ### Key Modules
