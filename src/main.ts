@@ -8,6 +8,8 @@ import { SessionListModal, buildSessionEntries } from "./session-list";
 import { PiStatusBar } from "./statusbar";
 import { CommandSuggest } from "./commands";
 import type { PiCommand } from "./commands";
+import { MessageStore } from "./message-store";
+import type { MessageStoreData } from "./message-store";
 
 interface ModelOption {
     id: string;
@@ -46,13 +48,17 @@ export default class PiPlugin extends Plugin {
     settings: PiPluginSettings = DEFAULT_SETTINGS;
     connection: PiConnection | null = null;
     sessionManager: SessionManager = new SessionManager();
+    messageStore: MessageStore = new MessageStore();
     statusBar: PiStatusBar | null = null;
     private commandSuggest: CommandSuggest | null = null;
     /** IDs of dynamically registered Pi commands (for cleanup on re-registration) */
     private dynamicCommandIds: string[] = [];
+    /** Debounce timer for message store persistence */
+    private storeFlushTimer: ReturnType<typeof setTimeout> | null = null;
 
     async onload(): Promise<void> {
         await this.loadSettings();
+        await this.loadMessageStore();
 
         this.addSettingTab(new PiSettingTab(this.app, this));
 
@@ -127,6 +133,13 @@ export default class PiPlugin extends Plugin {
             } catch (err) {
                 console.error("[Pi Plugin] Failed to save session on unload:", err);
             }
+        }
+
+        // Flush message store
+        await this.flushMessageStore();
+        if (this.storeFlushTimer) {
+            clearTimeout(this.storeFlushTimer);
+            this.storeFlushTimer = null;
         }
 
         if (this.connection) {
@@ -239,44 +252,11 @@ export default class PiPlugin extends Plugin {
     }
 
     /**
-     * Start a new session — save current if needed, clear view, send new_session RPC.
+     * Start a new session — delegates to the view's newSession flow.
      */
     private async newSession(): Promise<void> {
-        const view = this.getActiveView();
-        if (!view) {
-            // No view open — just open one
-            await this.activateView();
-            return;
-        }
-
-        // Save current conversation if it has content
-        if (view.hasMessages()) {
-            try {
-                const savedPath = await view.autoSave();
-                if (!savedPath) {
-                    new Notice("Warning: Session not saved (persistence disabled or empty)");
-                }
-            } catch (err) {
-                console.error("[Pi Plugin] Auto-save before new session failed:", err);
-                new Notice("Failed to save current session. New session cancelled.");
-                return;
-            }
-        }
-
-        // Clear the view (only reached if save succeeded or conversation was empty)
-        view.clearMessages();
-
-        // Tell Pi to start a new session
-        if (this.connection && this.connection.isConnected()) {
-            try {
-                await this.connection.send({ type: "new_session" });
-            } catch (err) {
-                console.warn("[Pi Plugin] new_session RPC failed:", err);
-                // Non-fatal — view is already cleared
-            }
-        }
-
-        new Notice("New session started");
+        const view = await this.activateView();
+        view.startNewSession();
     }
 
     /**
@@ -332,8 +312,47 @@ export default class PiPlugin extends Plugin {
         view.sendMessage(`/${commandName}`);
     }
 
+    /**
+     * Load message store from plugin data.
+     */
+    private async loadMessageStore(): Promise<void> {
+        try {
+            const raw = await this.loadData();
+            const storeData = raw?.messageStore as MessageStoreData | undefined;
+            this.messageStore.load(storeData || null);
+        } catch {
+            // Non-fatal
+        }
+    }
+
+    /**
+     * Persist message store to plugin data (debounced).
+     */
+    scheduleStoreFlush(): void {
+        if (this.storeFlushTimer) return;
+        this.storeFlushTimer = setTimeout(() => {
+            this.storeFlushTimer = null;
+            this.flushMessageStore();
+        }, 2000);
+    }
+
+    /**
+     * Immediately persist message store.
+     */
+    async flushMessageStore(): Promise<void> {
+        if (!this.messageStore.isDirty()) return;
+        try {
+            const existing = (await this.loadData()) || {};
+            existing.messageStore = this.messageStore.serialize();
+            await this.saveData(existing);
+        } catch (err) {
+            console.error("[Pi Plugin] Failed to flush message store:", err);
+        }
+    }
+
     async loadSettings(): Promise<void> {
-        this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
+        const raw = await this.loadData();
+        this.settings = Object.assign({}, DEFAULT_SETTINGS, raw);
     }
 
     async saveSettings(): Promise<void> {

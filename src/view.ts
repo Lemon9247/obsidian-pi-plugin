@@ -40,6 +40,8 @@ export class PiChatView extends ItemView {
     private messages: ChatMessage[] = [];
     private readOnly = false;
     private streaming = false;
+    /** Current Pi session file path (for message store keying) */
+    private currentSessionPath: string | null = null;
 
     /** Currently streaming assistant message element, used for live re-rendering */
     private streamingMessageEl: HTMLElement | null = null;
@@ -187,6 +189,7 @@ export class PiChatView extends ItemView {
         this.messages.push(msg);
         this.renderMessage(msg);
         this.scrollToBottom();
+        this.persistMessage(msg);
     }
 
     /**
@@ -228,8 +231,40 @@ export class PiChatView extends ItemView {
         });
         this.commandSuggest.setConnection(conn);
 
-        // Initial header refresh after connection
-        setTimeout(() => this.refreshHeader(), 1000);
+        // Initial header refresh + restore last session after connection
+        setTimeout(() => {
+            this.refreshHeader();
+            this.restoreSession();
+        }, 1000);
+    }
+
+    /**
+     * Restore the last active session's messages from the message store.
+     */
+    private async restoreSession(): Promise<void> {
+        const conn = this.plugin.connection;
+        if (!conn?.isConnected()) return;
+
+        try {
+            const response = await conn.send({ type: "get_state" });
+            const data = response.data as Record<string, unknown> | undefined;
+            const sessionFile = data?.sessionFile as string | undefined;
+            if (sessionFile) {
+                this.currentSessionPath = sessionFile;
+                this.plugin.messageStore.setLastSession(sessionFile);
+                this.plugin.scheduleStoreFlush();
+
+                // If we have no messages displayed, try loading from store
+                if (this.messages.length === 0) {
+                    const stored = this.plugin.messageStore.getMessages(sessionFile);
+                    if (stored.length > 0) {
+                        this.displayMessages(stored, false);
+                    }
+                }
+            }
+        } catch {
+            // Non-fatal
+        }
     }
 
     /**
@@ -381,10 +416,22 @@ export class PiChatView extends ItemView {
     }
 
     /**
+     * Public API for starting a new session (used by command palette).
+     */
+    startNewSession(): void {
+        this.newSessionFromHeader();
+    }
+
+    /**
      * Create a new session from the header button.
      */
     private async newSessionFromHeader(): Promise<void> {
-        // Save current if it has content
+        // Save current messages to store
+        if (this.currentSessionPath && this.messages.length > 0) {
+            this.plugin.messageStore.setMessages(this.currentSessionPath, this.messages);
+        }
+
+        // Save markdown snapshot if it has content
         if (this.hasMessages()) {
             try {
                 await this.autoSave();
@@ -393,7 +440,11 @@ export class PiChatView extends ItemView {
             }
         }
 
+        // Reset stream handler and view
+        this.streamHandler.reset();
+        this.setStreamingState(false);
         this.clearMessages();
+        this.currentSessionPath = null;
 
         const conn = this.plugin.connection;
         if (conn?.isConnected()) {
@@ -406,17 +457,27 @@ export class PiChatView extends ItemView {
 
         // Reset header
         if (this.headerSessionName) this.headerSessionName.setText("New Session");
+        this.sessionPanel?.setCurrentSession(null);
+        this.plugin.statusBar?.refreshModel();
         new Notice("New session started");
 
-        // Refresh after short delay for Pi to initialize
-        setTimeout(() => this.refreshHeader(), 500);
+        // Refresh after short delay for Pi to initialize — picks up new session path
+        setTimeout(async () => {
+            await this.refreshHeader();
+            await this.restoreSession();
+        }, 500);
     }
 
     /**
      * Switch to a Pi session by path.
      */
     private async switchToSession(session: PiSession): Promise<void> {
-        // Save current session if needed
+        // Save current messages to store before switching
+        if (this.currentSessionPath && this.messages.length > 0) {
+            this.plugin.messageStore.setMessages(this.currentSessionPath, this.messages);
+        }
+
+        // Save markdown snapshot if needed
         if (this.hasMessages()) {
             try {
                 await this.autoSave();
@@ -425,6 +486,9 @@ export class PiChatView extends ItemView {
             }
         }
 
+        // Reset stream handler before clearing view
+        this.streamHandler.reset();
+        this.setStreamingState(false);
         this.clearMessages();
 
         const conn = this.plugin.connection;
@@ -438,12 +502,32 @@ export class PiChatView extends ItemView {
             }
         }
 
+        // Update session tracking
+        this.currentSessionPath = session.path;
+        this.plugin.messageStore.setLastSession(session.path);
+        this.plugin.scheduleStoreFlush();
+
+        // Reload messages from store
+        const stored = this.plugin.messageStore.getMessages(session.path);
+        if (stored.length > 0) {
+            for (const msg of stored) {
+                this.messages.push(msg);
+                this.renderMessage(msg);
+            }
+            this.scrollToBottom();
+        }
+
         // Update header and panel state
         if (this.headerSessionName) {
             this.headerSessionName.setText(session.name);
         }
         this.sessionPanel?.setCurrentSession(session.path);
         this.sessionPanel?.hide();
+
+        // Update status bar
+        this.plugin.statusBar?.refreshModel();
+        this.plugin.statusBar?.refreshStats();
+
         new Notice(`Switched to: ${session.name}`);
 
         // Refresh header after switch
@@ -598,6 +682,15 @@ export class PiChatView extends ItemView {
                 this.setStreamingState(false);
             }
         }
+    }
+
+    /**
+     * Persist a message to the message store (debounced flush).
+     */
+    private persistMessage(msg: ChatMessage): void {
+        if (this.readOnly || !this.currentSessionPath) return;
+        this.plugin.messageStore.appendMessage(this.currentSessionPath, msg);
+        this.plugin.scheduleStoreFlush();
     }
 
     /**
@@ -973,6 +1066,7 @@ export class PiChatView extends ItemView {
         // Always push message, even if the streaming element was cleaned up
         this.messages.push(msg);
         this.scrollToBottom();
+        this.persistMessage(msg);
     }
 
     private renderMessage(msg: ChatMessage): void {
