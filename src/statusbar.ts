@@ -16,6 +16,7 @@ export class PiStatusBar {
     constructor(plugin: PiPlugin, statusBarEl: HTMLElement) {
         this.plugin = plugin;
         this.statusBarEl = statusBarEl;
+        this.statusBarEl.addClass("pi-status-bar");
         this.render();
     }
 

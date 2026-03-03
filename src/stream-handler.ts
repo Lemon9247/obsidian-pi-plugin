@@ -104,6 +104,12 @@ export class StreamHandler {
     // --- Event handlers ---
 
     private handleMessageStart(event: Record<string, unknown>): void {
+        // Only create streaming state for assistant messages.
+        // Pi emits message_start/message_end for user echoes and tool results too —
+        // ignore those so we don't create ghost "Pi" elements in the view.
+        const message = event.message as Record<string, unknown> | undefined;
+        if (message && message.role !== 'assistant') return;
+
         // Reset accumulators for the new message
         this.currentText = '';
         this.currentThinking = '';
@@ -224,13 +230,25 @@ export class StreamHandler {
         }
     }
 
-    private handleMessageEnd(_event: Record<string, unknown>): void {
+    private handleMessageEnd(event: Record<string, unknown>): void {
         if (!this.currentMessage) return;
 
         // Finalize the message
         this.currentMessage.isStreaming = false;
         this.currentMessage.content = this.currentText;
-        this.currentMessage.thinkingContent = this.currentThinking || undefined;
+
+        // Use accumulated thinking from streaming deltas if available.
+        // Fall back to extracting thinking from the message_end event's
+        // complete message object — some models/providers don't stream
+        // thinking deltas but include them in the final message.
+        let thinking = this.currentThinking;
+        if (!thinking) {
+            const message = event.message as Record<string, unknown> | undefined;
+            if (message) {
+                thinking = this.extractThinkingFromMessage(message);
+            }
+        }
+        this.currentMessage.thinkingContent = thinking || undefined;
 
         this.callbacks.onMessageComplete(this.buildCurrentMessage());
         this.currentMessage = null;
@@ -322,6 +340,22 @@ export class StreamHandler {
             content: this.currentText,
             thinkingContent: this.currentThinking || undefined,
         };
+    }
+
+    /**
+     * Extract thinking content from a complete AssistantMessage.
+     * The message's content array may include {type: "thinking", thinking: "..."} blocks
+     * that weren't delivered via streaming thinking_delta events.
+     */
+    private extractThinkingFromMessage(message: Record<string, unknown>): string {
+        const content = message.content as Array<Record<string, unknown>> | undefined;
+        if (!Array.isArray(content)) return '';
+
+        return content
+            .filter((block) => block.type === 'thinking')
+            .map((block) => block.thinking as string)
+            .filter(Boolean)
+            .join('\n\n');
     }
 
     /**

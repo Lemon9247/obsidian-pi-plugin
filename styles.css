@@ -21,7 +21,13 @@
 
 /* ── Messages ── */
 .pi-message {
-    margin-bottom: 16px;
+    margin-bottom: 20px;
+    padding-bottom: 16px;
+    border-bottom: 1px solid var(--background-modifier-border);
+}
+
+.pi-message:last-child {
+    border-bottom: none;
 }
 
 .pi-message-label {
@@ -213,6 +219,11 @@
 
 .pi-attachment-thumb {
     flex-shrink: 0;
+}
+
+/* ── Status bar ── */
+.pi-status-bar {
+    padding: 0 8px;
 }
 
 /* ── Command suggest ── */
