@@ -449,16 +449,27 @@ export class PiChatView extends ItemView {
         if (!contentEl) return;
 
         if (msg.content) {
-            // Text is streaming — show it and remove thinking indicator
-            const indicator = this.streamingMessageEl.querySelector(".pi-thinking-indicator");
-            if (indicator) indicator.remove();
+            // Text is streaming — show it
+            // Collapse the live thinking block now that the response is arriving
+            const liveThinking = this.streamingMessageEl.querySelector(".pi-thinking-live");
+            if (liveThinking) {
+                (liveThinking as HTMLDetailsElement).open = false;
+                liveThinking.removeClass("pi-thinking-live");
+            }
             (contentEl as HTMLElement).setText(msg.content);
         } else if (msg.thinkingContent) {
-            // Thinking in progress, no text yet — show live indicator
-            if (!this.streamingMessageEl.querySelector(".pi-thinking-indicator")) {
-                const indicator = createDiv({ cls: "pi-thinking-indicator" });
-                indicator.setText("Thinking…");
-                this.streamingMessageEl.insertBefore(indicator, contentEl);
+            // Thinking in progress — show expandable live thinking block
+            let thinkingEl = this.streamingMessageEl.querySelector(".pi-thinking-live") as HTMLDetailsElement | null;
+            if (!thinkingEl) {
+                thinkingEl = createEl("details", { cls: "pi-thinking pi-thinking-live" });
+                thinkingEl.open = true;
+                thinkingEl.createEl("summary", { text: "Thinking…" });
+                thinkingEl.createDiv({ cls: "pi-thinking-content" });
+                this.streamingMessageEl.insertBefore(thinkingEl, contentEl);
+            }
+            const thinkingContentEl = thinkingEl.querySelector(".pi-thinking-content");
+            if (thinkingContentEl) {
+                (thinkingContentEl as HTMLElement).setText(msg.thinkingContent);
             }
         }
 
@@ -504,9 +515,9 @@ export class PiChatView extends ItemView {
                 }
             }
 
-            // Remove live thinking indicator
-            const indicator = this.streamingMessageEl.querySelector(".pi-thinking-indicator");
-            if (indicator) indicator.remove();
+            // Remove live thinking block — replaced by final rendered version
+            const liveThinking = this.streamingMessageEl.querySelector(".pi-thinking-live, .pi-thinking");
+            if (liveThinking) liveThinking.remove();
 
             // Add thinking content as a collapsed details element BEFORE the response text
             if (msg.thinkingContent) {
