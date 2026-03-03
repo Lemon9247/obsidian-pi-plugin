@@ -9,6 +9,9 @@ import type { Attachment } from "./input";
 import { CommandSuggest } from "./commands";
 import { AttachmentPicker } from "./attachments";
 import { SessionManager } from "./sessions";
+import { SessionPanel } from "./session-panel";
+import type { PiSession } from "./session-scanner";
+import { unlink } from "fs/promises";
 
 export const VIEW_TYPE_PI_CHAT = "pi-chat-view";
 
@@ -26,6 +29,7 @@ export class PiChatView extends ItemView {
     private headerModel: HTMLElement | null = null;
     private headerCwd: HTMLElement | null = null;
     private isEditingName = false;
+    private sessionPanel: SessionPanel | null = null;
     private messagesContainer: HTMLElement;
     private inputContainer: HTMLElement;
     private chatInput: ChatInput | null = null;
@@ -86,8 +90,18 @@ export class PiChatView extends ItemView {
         this.headerBar = container.createDiv({ cls: "pi-header-bar" });
         this.buildHeaderBar(this.headerBar);
 
+        // Chat body — session panel (hidden) + messages
+        const chatBody = container.createDiv({ cls: "pi-chat-body" });
+
+        // Session panel (sidebar within chat)
+        this.sessionPanel = new SessionPanel(chatBody, {
+            onSwitch: (session) => this.switchToSession(session),
+            onDelete: (session) => this.deleteSession(session),
+            onExport: (session) => this.exportSession(session),
+        });
+
         // Scrollable messages area
-        this.messagesContainer = container.createDiv({ cls: "pi-messages" });
+        this.messagesContainer = chatBody.createDiv({ cls: "pi-messages" });
 
         // Input container with ChatInput, abort button, and attachment support
         this.inputContainer = container.createDiv({ cls: "pi-input-container" });
@@ -154,6 +168,10 @@ export class PiChatView extends ItemView {
         this.headerSessionName = null;
         this.headerModel = null;
         this.headerCwd = null;
+        if (this.sessionPanel) {
+            this.sessionPanel.destroy();
+            this.sessionPanel = null;
+        }
 
         // Clear view state
         this.messages = [];
@@ -241,6 +259,14 @@ export class PiChatView extends ItemView {
         });
 
         const right = container.createDiv({ cls: "pi-header-right" });
+
+        // Sessions toggle button
+        const sessionsBtn = right.createEl("button", {
+            cls: "pi-header-sessions-btn",
+            attr: { "aria-label": "Browse sessions" },
+        });
+        sessionsBtn.setText("📋");
+        sessionsBtn.addEventListener("click", () => this.sessionPanel?.toggle());
 
         // New session button
         const newBtn = right.createEl("button", {
@@ -384,6 +410,120 @@ export class PiChatView extends ItemView {
 
         // Refresh after short delay for Pi to initialize
         setTimeout(() => this.refreshHeader(), 500);
+    }
+
+    /**
+     * Switch to a Pi session by path.
+     */
+    private async switchToSession(session: PiSession): Promise<void> {
+        // Save current session if needed
+        if (this.hasMessages()) {
+            try {
+                await this.autoSave();
+            } catch (err) {
+                console.error("[Pi Chat] Auto-save before switch failed:", err);
+            }
+        }
+
+        this.clearMessages();
+
+        const conn = this.plugin.connection;
+        if (conn?.isConnected()) {
+            try {
+                await conn.send({ type: "switch_session", sessionFile: session.path });
+            } catch (err) {
+                console.warn("[Pi Chat] switch_session RPC failed:", err);
+                new Notice("Failed to switch session");
+                return;
+            }
+        }
+
+        // Update header and panel state
+        if (this.headerSessionName) {
+            this.headerSessionName.setText(session.name);
+        }
+        this.sessionPanel?.setCurrentSession(session.path);
+        this.sessionPanel?.hide();
+        new Notice(`Switched to: ${session.name}`);
+
+        // Refresh header after switch
+        setTimeout(() => this.refreshHeader(), 500);
+    }
+
+    /**
+     * Delete a Pi session file.
+     */
+    private async deleteSession(session: PiSession): Promise<void> {
+        await unlink(session.path);
+    }
+
+    /**
+     * Export a Pi session to the vault as a markdown note.
+     * This is a best-effort export — reads the .jsonl and converts to our markdown format.
+     */
+    private async exportSession(session: PiSession): Promise<void> {
+        try {
+            const { readFile } = await import("fs/promises");
+            const content = await readFile(session.path, "utf-8");
+            const lines = content.split("\n").filter((l) => l.trim());
+
+            const messages: ChatMessage[] = [];
+            for (const line of lines) {
+                try {
+                    const entry = JSON.parse(line);
+                    if (entry.role === "user") {
+                        const text = typeof entry.content === "string"
+                            ? entry.content
+                            : Array.isArray(entry.content)
+                                ? entry.content.filter((b: any) => b.type === "text").map((b: any) => b.text).join("\n")
+                                : "";
+                        if (text) {
+                            messages.push({
+                                id: generateMessageId(),
+                                role: "user",
+                                content: text,
+                                timestamp: Date.now(),
+                            });
+                        }
+                    } else if (entry.role === "assistant") {
+                        const text = typeof entry.content === "string"
+                            ? entry.content
+                            : Array.isArray(entry.content)
+                                ? entry.content.filter((b: any) => b.type === "text").map((b: any) => b.text).join("\n")
+                                : "";
+                        if (text) {
+                            messages.push({
+                                id: generateMessageId(),
+                                role: "assistant",
+                                content: text,
+                                timestamp: Date.now(),
+                            });
+                        }
+                    }
+                } catch {
+                    // Skip malformed lines
+                }
+            }
+
+            if (messages.length === 0) {
+                new Notice("Session has no exportable messages");
+                return;
+            }
+
+            const path = await this.sessionManager.saveSession(
+                messages,
+                this.plugin.settings,
+                this.app.vault,
+            );
+            if (path) {
+                new Notice(`Exported to ${path}`);
+            } else {
+                new Notice("Export failed — persistence may be disabled");
+            }
+        } catch (err) {
+            console.error("[Pi Chat] Export failed:", err);
+            new Notice("Failed to export session");
+        }
     }
 
     /**
