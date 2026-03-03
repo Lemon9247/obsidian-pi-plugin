@@ -85,6 +85,13 @@ export class ChatInput {
     }
 
     /**
+     * Update the placeholder text.
+     */
+    setPlaceholder(text: string): void {
+        this.textareaEl.placeholder = text;
+    }
+
+    /**
      * Set the textarea value programmatically (used by command completion).
      */
     setValue(text: string): void {

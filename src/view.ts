@@ -30,6 +30,7 @@ export class PiChatView extends ItemView {
     private readOnlyBanner: HTMLElement | null = null;
     private messages: ChatMessage[] = [];
     private readOnly = false;
+    private streaming = false;
 
     /** Currently streaming assistant message element, used for live re-rendering */
     private streamingMessageEl: HTMLElement | null = null;
@@ -192,6 +193,8 @@ export class PiChatView extends ItemView {
         // User sent a message — follow the response
         this.userScrolledUp = false;
 
+        const isSteering = this.streaming;
+
         // Build the display text (include attachment names)
         let displayText = text;
         const fileAttachments = attachments.filter((a) => a.type === "file");
@@ -209,11 +212,13 @@ export class PiChatView extends ItemView {
             role: "user",
             content: displayText,
             timestamp: Date.now(),
+            isSteering: isSteering || undefined,
         };
         this.addMessage(userMsg);
 
-        // Disable input during streaming
-        this.setStreamingState(true);
+        if (!isSteering) {
+            this.setStreamingState(true);
+        }
 
         // Build the RPC message
         let message = text;
@@ -225,9 +230,9 @@ export class PiChatView extends ItemView {
 
         const conn = this.plugin.ensureConnection();
 
-        // Build command — include images if present
+        // During streaming: steer the agent. Otherwise: new prompt.
         const command: Record<string, unknown> = {
-            type: "prompt",
+            type: isSteering ? "steer" : "prompt",
             message,
         };
 
@@ -244,7 +249,9 @@ export class PiChatView extends ItemView {
         } catch (err) {
             console.error("[Pi Chat] Failed to send message:", err);
             new Notice("Failed to send message to Pi");
-            this.setStreamingState(false);
+            if (!isSteering) {
+                this.setStreamingState(false);
+            }
         }
     }
 
@@ -375,14 +382,20 @@ export class PiChatView extends ItemView {
     }
 
     /**
-     * Toggle streaming state — disables/enables input, shows/hides abort button.
+     * Toggle streaming state — shows/hides abort button, updates placeholder.
+     * Input stays enabled so the user can send steering messages.
      */
     private setStreamingState(streaming: boolean): void {
-        if (this.chatInput) {
-            this.chatInput.setEnabled(!streaming);
-        }
+        this.streaming = streaming;
         if (this.abortBtn) {
             this.abortBtn.style.display = streaming ? "inline-block" : "none";
+        }
+        if (this.chatInput) {
+            this.chatInput.setPlaceholder(
+                streaming
+                    ? "Send a message to steer Pi…"
+                    : "Message Pi… (/ for commands, @ for files)",
+            );
         }
     }
 
@@ -566,7 +579,7 @@ export class PiChatView extends ItemView {
         try {
             switch (msg.role) {
                 case "user":
-                    this.renderer.renderUserMessage(this.messagesContainer, msg.content);
+                    this.renderer.renderUserMessage(this.messagesContainer, msg.content, msg.isSteering);
                     break;
                 case "assistant":
                     this.renderer.renderAssistantMessage(

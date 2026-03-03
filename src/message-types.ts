@@ -16,6 +16,8 @@ export interface ChatMessage {
     isStreaming?: boolean;
     thinkingContent?: string;
     isError?: boolean;
+    /** True if this user message was sent as a steering interrupt */
+    isSteering?: boolean;
     /** Pi's internal entry ID, used for fork/session operations */
     piEntryId?: string;
 }

@@ -56,10 +56,16 @@ export class MessageRenderer {
     /**
      * Render a user message in a styled container.
      */
-    renderUserMessage(container: HTMLElement, text: string): HTMLElement {
-        const wrapper = container.createDiv({ cls: "pi-message pi-message-user" });
+    renderUserMessage(container: HTMLElement, text: string, isSteering?: boolean): HTMLElement {
+        const cls = isSteering
+            ? "pi-message pi-message-user pi-message-steer"
+            : "pi-message pi-message-user";
+        const wrapper = container.createDiv({ cls });
         const label = wrapper.createDiv({ cls: "pi-message-label" });
-        label.createSpan({ text: "You", cls: "pi-message-label-text" });
+        label.createSpan({
+            text: isSteering ? "You (steer)" : "You",
+            cls: "pi-message-label-text",
+        });
 
         const contentEl = wrapper.createDiv({ cls: "pi-message-content" });
         contentEl.createEl("p", { text });

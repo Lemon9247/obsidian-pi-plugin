@@ -53,6 +53,16 @@
     margin: 0;
 }
 
+/* ── Steering messages ── */
+.pi-message-steer .pi-message-content {
+    background: var(--background-modifier-error-hover);
+    border-left: 3px solid var(--text-accent);
+}
+
+.pi-message-steer .pi-message-label-text {
+    color: var(--text-accent);
+}
+
 /* ── Assistant messages ── */
 .pi-message-assistant .pi-message-content {
     padding: 4px 0;
