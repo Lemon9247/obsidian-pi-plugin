@@ -9,9 +9,10 @@
 import { App, FuzzySuggestModal } from "obsidian";
 import type { PiConnection } from "./rpc";
 
-interface PiCommand {
+export interface PiCommand {
     name: string;
     description: string;
+    source?: string;
 }
 
 /**
@@ -42,7 +43,11 @@ class CommandSuggestModal extends FuzzySuggestModal<PiCommand> {
 
     renderSuggestion(item: { item: PiCommand; match: { score: number; matches: any[] } }, el: HTMLElement): void {
         const wrapper = el.createDiv({ cls: "pi-command-suggest-item" });
-        wrapper.createDiv({ text: `/${item.item.name}`, cls: "pi-command-name" });
+        const header = wrapper.createDiv({ cls: "pi-command-header" });
+        header.createSpan({ text: `/${item.item.name}`, cls: "pi-command-name" });
+        if (item.item.source) {
+            header.createSpan({ text: item.item.source, cls: "pi-command-source" });
+        }
         if (item.item.description) {
             wrapper.createDiv({ text: item.item.description, cls: "pi-command-desc" });
         }
@@ -88,6 +93,13 @@ export class CommandSuggest {
     }
 
     /**
+     * Public access to fetch commands — used by command palette registration.
+     */
+    async getCommands(): Promise<PiCommand[]> {
+        return this.fetchCommands();
+    }
+
+    /**
      * Fetch commands from Pi. Uses cached list if available.
      * Cache is invalidated on each trigger to stay fresh.
      */
@@ -104,6 +116,7 @@ export class CommandSuggest {
                     .map((cmd) => ({
                         name: String(cmd.name || ""),
                         description: String(cmd.description || ""),
+                        source: String(cmd.source || ""),
                     }))
                     .filter((cmd) => cmd.name.length > 0);
                 return this.cachedCommands;

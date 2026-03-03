@@ -6,6 +6,8 @@ import { PiChatView, VIEW_TYPE_PI_CHAT } from "./view";
 import { SessionManager } from "./sessions";
 import { SessionListModal, buildSessionEntries } from "./session-list";
 import { PiStatusBar } from "./statusbar";
+import { CommandSuggest } from "./commands";
+import type { PiCommand } from "./commands";
 
 interface ModelOption {
     id: string;
@@ -45,6 +47,9 @@ export default class PiPlugin extends Plugin {
     connection: PiConnection | null = null;
     sessionManager: SessionManager = new SessionManager();
     statusBar: PiStatusBar | null = null;
+    private commandSuggest: CommandSuggest | null = null;
+    /** IDs of dynamically registered Pi commands (for cleanup on re-registration) */
+    private dynamicCommandIds: string[] = [];
 
     async onload(): Promise<void> {
         await this.loadSettings();
@@ -274,6 +279,59 @@ export default class PiPlugin extends Plugin {
         new Notice("New session started");
     }
 
+    /**
+     * Fetch Pi's commands and register them in Obsidian's command palette.
+     * Re-registers on each call (commands may differ per project/connection).
+     */
+    async registerPiCommands(): Promise<void> {
+        // Initialize CommandSuggest if needed
+        if (!this.commandSuggest) {
+            this.commandSuggest = new CommandSuggest(this.app);
+        }
+        if (this.connection) {
+            this.commandSuggest.setConnection(this.connection);
+        }
+
+        // Remove previously registered dynamic commands
+        // Obsidian doesn't have removeCommand(), but we can re-register with same IDs
+        // which effectively updates them. We just need to track IDs.
+
+        let commands: PiCommand[];
+        try {
+            commands = await this.commandSuggest.getCommands();
+        } catch {
+            return;
+        }
+
+        const newIds: string[] = [];
+
+        for (const cmd of commands) {
+            const id = `pi-cmd-${cmd.name}`;
+            newIds.push(id);
+
+            // Only register if not already registered
+            if (!this.dynamicCommandIds.includes(id)) {
+                this.addCommand({
+                    id,
+                    name: `Pi: /${cmd.name}${cmd.description ? ` — ${cmd.description}` : ""}`,
+                    callback: () => {
+                        this.sendPiCommand(cmd.name);
+                    },
+                });
+            }
+        }
+
+        this.dynamicCommandIds = newIds;
+    }
+
+    /**
+     * Send a Pi command by activating the chat view and sending the command as a prompt.
+     */
+    private async sendPiCommand(commandName: string): Promise<void> {
+        const view = await this.activateView();
+        view.sendMessage(`/${commandName}`);
+    }
+
     async loadSettings(): Promise<void> {
         this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
     }
@@ -339,11 +397,12 @@ export default class PiPlugin extends Plugin {
 
         this.connection.connect();
 
-        // Refresh status bar with model info once connected
+        // Refresh status bar and register commands once connected
         // Use a short delay to let Pi initialize
         setTimeout(() => {
             this.statusBar?.refreshModel();
             this.statusBar?.refreshStats();
+            this.registerPiCommands();
         }, 1000);
 
         return this.connection;

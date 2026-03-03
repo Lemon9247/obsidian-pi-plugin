@@ -543,10 +543,24 @@
     padding: 4px 0;
 }
 
+.pi-command-header {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
 .pi-command-name {
     font-weight: 600;
     font-family: var(--font-monospace);
     font-size: 0.9em;
+}
+
+.pi-command-source {
+    font-size: 0.7em;
+    color: var(--text-faint);
+    background: var(--background-primary-alt);
+    padding: 0 4px;
+    border-radius: 4px;
 }
 
 .pi-command-desc {
