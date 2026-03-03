@@ -7,6 +7,95 @@
     height: 100%;
 }
 
+/* ── Header Bar ── */
+.pi-header-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 6px 12px;
+    border-bottom: 1px solid var(--background-modifier-border);
+    background: var(--background-secondary);
+    flex-shrink: 0;
+    min-height: 32px;
+    gap: 8px;
+}
+
+.pi-header-left {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+    flex: 1;
+}
+
+.pi-header-right {
+    display: flex;
+    align-items: center;
+    flex-shrink: 0;
+}
+
+.pi-header-session-name {
+    font-weight: 600;
+    font-size: 0.9em;
+    cursor: pointer;
+    padding: 2px 4px;
+    border-radius: 4px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 200px;
+}
+
+.pi-header-session-name:hover {
+    background: var(--background-modifier-hover);
+}
+
+.pi-header-name-input {
+    font-weight: 600;
+    font-size: 0.9em;
+    border: 1px solid var(--interactive-accent);
+    border-radius: 4px;
+    padding: 1px 4px;
+    background: var(--background-primary);
+    color: var(--text-normal);
+    width: 180px;
+    outline: none;
+}
+
+.pi-header-model {
+    font-size: 0.75em;
+    color: var(--text-muted);
+    background: var(--background-primary-alt);
+    padding: 1px 6px;
+    border-radius: 8px;
+    white-space: nowrap;
+}
+
+.pi-header-cwd {
+    font-size: 0.75em;
+    color: var(--text-muted);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 150px;
+}
+
+.pi-header-new-btn {
+    font-size: 0.8em;
+    padding: 2px 10px;
+    border-radius: 4px;
+    border: 1px solid var(--background-modifier-border);
+    background: var(--background-primary);
+    color: var(--text-muted);
+    cursor: pointer;
+    white-space: nowrap;
+}
+
+.pi-header-new-btn:hover {
+    background: var(--background-modifier-hover);
+    color: var(--text-normal);
+}
+
 .pi-messages {
     flex: 1;
     overflow-y: auto;

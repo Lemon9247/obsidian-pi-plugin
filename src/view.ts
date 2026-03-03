@@ -21,6 +21,11 @@ export class PiChatView extends ItemView {
     private renderer: MessageRenderer;
     private streamHandler: StreamHandler;
     private sessionManager: SessionManager;
+    private headerBar: HTMLElement | null = null;
+    private headerSessionName: HTMLElement | null = null;
+    private headerModel: HTMLElement | null = null;
+    private headerCwd: HTMLElement | null = null;
+    private isEditingName = false;
     private messagesContainer: HTMLElement;
     private inputContainer: HTMLElement;
     private chatInput: ChatInput | null = null;
@@ -76,6 +81,10 @@ export class PiChatView extends ItemView {
         const container = this.contentEl;
         container.empty();
         container.addClass("pi-chat-container");
+
+        // Header bar — session name, model, working directory
+        this.headerBar = container.createDiv({ cls: "pi-header-bar" });
+        this.buildHeaderBar(this.headerBar);
 
         // Scrollable messages area
         this.messagesContainer = container.createDiv({ cls: "pi-messages" });
@@ -141,6 +150,10 @@ export class PiChatView extends ItemView {
         }
         this.abortBtn = null;
         this.readOnlyBanner = null;
+        this.headerBar = null;
+        this.headerSessionName = null;
+        this.headerModel = null;
+        this.headerCwd = null;
 
         // Clear view state
         this.messages = [];
@@ -188,8 +201,189 @@ export class PiChatView extends ItemView {
      */
     connectToRpc(): void {
         const conn = this.plugin.ensureConnection();
-        conn.onEvent((event) => this.streamHandler.handleEvent(event));
+        conn.onEvent((event) => {
+            this.streamHandler.handleEvent(event);
+            // Refresh header on agent_end (model/stats may have changed)
+            if ((event.type as string) === "agent_end") {
+                this.refreshHeader();
+            }
+        });
         this.commandSuggest.setConnection(conn);
+
+        // Initial header refresh after connection
+        setTimeout(() => this.refreshHeader(), 1000);
+    }
+
+    /**
+     * Build the header bar contents: session name, model badge, cwd, new session button.
+     */
+    private buildHeaderBar(container: HTMLElement): void {
+        const left = container.createDiv({ cls: "pi-header-left" });
+
+        // Session name — click to edit
+        this.headerSessionName = left.createSpan({
+            cls: "pi-header-session-name",
+            text: "New Session",
+        });
+        this.headerSessionName.setAttribute("title", "Click to rename session");
+        this.headerSessionName.addEventListener("click", () => this.startEditingSessionName());
+
+        // Model badge
+        this.headerModel = left.createSpan({
+            cls: "pi-header-model",
+            text: "",
+        });
+
+        // Working directory
+        this.headerCwd = left.createSpan({
+            cls: "pi-header-cwd",
+            text: "",
+        });
+
+        const right = container.createDiv({ cls: "pi-header-right" });
+
+        // New session button
+        const newBtn = right.createEl("button", {
+            cls: "pi-header-new-btn",
+            attr: { "aria-label": "New session" },
+        });
+        newBtn.setText("+ New");
+        newBtn.addEventListener("click", () => this.newSessionFromHeader());
+    }
+
+    /**
+     * Refresh the header bar with current session state from Pi.
+     */
+    async refreshHeader(): Promise<void> {
+        const conn = this.plugin.connection;
+        if (!conn?.isConnected()) return;
+
+        try {
+            const response = await conn.send({ type: "get_state" });
+            const data = response.data as Record<string, unknown> | undefined;
+            if (!data) return;
+
+            // Session name
+            const sessionName = data.sessionName as string | undefined;
+            const sessionFile = data.sessionFile as string | undefined;
+            if (this.headerSessionName && !this.isEditingName) {
+                const displayName = sessionName
+                    || (sessionFile ? sessionFile.replace(/^.*\//, "").replace(/\.jsonl$/, "") : null)
+                    || "New Session";
+                this.headerSessionName.setText(displayName);
+            }
+
+            // Model
+            const model = data.model as Record<string, unknown> | undefined;
+            const modelName = model?.name as string | undefined;
+            const thinkingLevel = data.thinkingLevel as string | undefined;
+            if (this.headerModel) {
+                let modelText = modelName || "";
+                if (thinkingLevel && thinkingLevel !== "off") {
+                    modelText += ` :${thinkingLevel}`;
+                }
+                this.headerModel.setText(modelText);
+                this.headerModel.style.display = modelText ? "" : "none";
+            }
+
+            // Working directory
+            const cwd = data.cwd as string | undefined;
+            if (this.headerCwd) {
+                // Show just the last directory component
+                const shortCwd = cwd ? cwd.replace(/^.*\//, "") : "";
+                this.headerCwd.setText(shortCwd ? `📁 ${shortCwd}` : "");
+                this.headerCwd.style.display = shortCwd ? "" : "none";
+                if (cwd) this.headerCwd.setAttribute("title", cwd);
+            }
+        } catch {
+            // Non-fatal — header is informational
+        }
+    }
+
+    /**
+     * Start inline editing of the session name.
+     */
+    private startEditingSessionName(): void {
+        if (this.isEditingName || !this.headerSessionName) return;
+        this.isEditingName = true;
+
+        const currentName = this.headerSessionName.getText();
+        this.headerSessionName.empty();
+
+        const input = this.headerSessionName.createEl("input", {
+            cls: "pi-header-name-input",
+            attr: { type: "text", value: currentName },
+        });
+        input.focus();
+        input.select();
+
+        const commit = async () => {
+            const newName = input.value.trim();
+            this.isEditingName = false;
+            if (this.headerSessionName) {
+                this.headerSessionName.empty();
+                this.headerSessionName.setText(newName || currentName);
+            }
+            if (newName && newName !== currentName) {
+                try {
+                    const conn = this.plugin.ensureConnection();
+                    await conn.send({ type: "set_session_name", name: newName });
+                } catch (err) {
+                    console.warn("[Pi Chat] Failed to rename session:", err);
+                    new Notice("Failed to rename session");
+                    // Revert
+                    if (this.headerSessionName) {
+                        this.headerSessionName.setText(currentName);
+                    }
+                }
+            }
+        };
+
+        input.addEventListener("blur", commit);
+        input.addEventListener("keydown", (e) => {
+            if (e.key === "Enter") {
+                e.preventDefault();
+                input.blur();
+            } else if (e.key === "Escape") {
+                this.isEditingName = false;
+                if (this.headerSessionName) {
+                    this.headerSessionName.empty();
+                    this.headerSessionName.setText(currentName);
+                }
+            }
+        });
+    }
+
+    /**
+     * Create a new session from the header button.
+     */
+    private async newSessionFromHeader(): Promise<void> {
+        // Save current if it has content
+        if (this.hasMessages()) {
+            try {
+                await this.autoSave();
+            } catch (err) {
+                console.error("[Pi Chat] Auto-save before new session failed:", err);
+            }
+        }
+
+        this.clearMessages();
+
+        const conn = this.plugin.connection;
+        if (conn?.isConnected()) {
+            try {
+                await conn.send({ type: "new_session" });
+            } catch (err) {
+                console.warn("[Pi Chat] new_session RPC failed:", err);
+            }
+        }
+
+        // Reset header
+        if (this.headerSessionName) this.headerSessionName.setText("New Session");
+        new Notice("New session started");
+
+        // Refresh after short delay for Pi to initialize
+        setTimeout(() => this.refreshHeader(), 500);
     }
 
     /**
